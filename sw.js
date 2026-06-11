@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-organized-menu-v2';
-const ASSETS = ['./', './index.html', './style.css?v=organized-menu-v2', './app.js?v=organized-menu-v2'];
+const CACHE_NAME = 'jungle-movie-smart-cards-v3';
+const ASSETS = ['./', './index.html', './style.css?v=smart-cards-v3', './app.js?v=smart-cards-v3'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

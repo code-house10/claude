@@ -3299,11 +3299,194 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     ];
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // SMART REVIEW CARDS
+  //
+  // Five card modes are picked per-card based on item kind and maturity:
+  //   recognize     — EN → AR (current behaviour, default for new cards)
+  //   produce       — AR → EN, user TYPES the answer (active recall, harder)
+  //   cloze         — context sentence with the target blanked out
+  //   listen        — TTS speaks the EN, user recalls AR (listening practice)
+  //   template-fill — template pattern + meaning, user recalls a usage example
+  //
+  // The picker favours easier modes for new cards and adds harder modes as
+  // the card matures. The user can disable any mode in the in-review settings
+  // panel — disabled modes simply drop out of the rotation.
+  //
+  // Again-cards are re-queued 3–5 positions ahead instead of disappearing
+  // until the next session (the previous behaviour was a known weakness).
+  // ════════════════════════════════════════════════════════════════
+
+  const SMART_MODES = ['recognize', 'produce', 'cloze', 'listen', 'template-fill'];
+
+  function getSmartReviewSettings() {
+    let raw;
+    try { raw = JSON.parse(localStorage.getItem('jm_smart_review_settings') || '{}'); } catch { raw = {}; }
+    const enabled = raw.enabled && typeof raw.enabled === 'object' ? raw.enabled : {};
+    return {
+      enabled: {
+        recognize:       enabled.recognize       !== false,
+        produce:         enabled.produce         !== false,
+        cloze:           enabled.cloze           !== false,
+        listen:          enabled.listen          !== false,
+        'template-fill': enabled['template-fill'] !== false
+      },
+      autoSpeak: raw.autoSpeak === true
+    };
+  }
+
+  function setSmartReviewSettings(patch) {
+    const cur = getSmartReviewSettings();
+    const next = { ...cur, ...patch, enabled: { ...cur.enabled, ...(patch?.enabled || {}) } };
+    localStorage.setItem('jm_smart_review_settings', JSON.stringify(next));
+    return next;
+  }
+
+  function speakText(text, lang = 'en-US') {
+    if (!text || !window.speechSynthesis) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(String(text));
+      u.lang = lang; u.rate = 0.95; u.pitch = 1;
+      // Prefer a native English voice if the browser exposes one — falls back silently.
+      const voices = window.speechSynthesis.getVoices();
+      const en = voices.find(v => /en-US/i.test(v.lang)) || voices.find(v => /^en/i.test(v.lang));
+      if (en) u.voice = en;
+      window.speechSynthesis.speak(u);
+    } catch (e) { console.warn('TTS failed:', e); }
+  }
+
+  // Normalise an answer for comparison: lowercase, strip diacritics + punctuation,
+  // collapse whitespace. Keeps Arabic letters and Latin letters intact.
+  function normalizeAnswer(s) {
+    return String(s || '')
+      .toLowerCase()
+      .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^\p{L}\p{N}\s']/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Tiny Levenshtein distance — good enough to flag typos in short subtitle words.
+  function editDistance(a, b) {
+    a = a || ''; b = b || '';
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    const m = a.length, n = b.length;
+    let prev = new Array(n + 1);
+    for (let j = 0; j <= n; j++) prev[j] = j;
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      }
+      prev = cur;
+    }
+    return prev[n];
+  }
+
+  // Returns 'exact' | 'almost' | 'wrong'. "almost" lets the user grade themselves
+  // honestly: we don't auto-mark, we just hint.
+  function validateAnswer(typed, expected) {
+    const t = normalizeAnswer(typed), e = normalizeAnswer(expected);
+    if (!t || !e) return 'wrong';
+    if (t === e) return 'exact';
+    // Accept "house" when expected is "the house" or vice versa.
+    if (e.includes(t) || t.includes(e)) return 'almost';
+    const dist = editDistance(t, e);
+    if (dist <= Math.max(1, Math.floor(e.length * 0.15))) return 'almost';
+    return 'wrong';
+  }
+
+  function pickCardMode(card) {
+    const { enabled } = getSmartReviewSettings();
+    const item = card.item;
+    const isWord = card.type === 'word';
+    const count = Number(item.reviewCount || 0);
+    const hasCloze = isWord && !!(item.contextEn || item.templateUsageEn);
+    const isTemplate = isWord && item.kind === 'template';
+    const isPhrase   = isWord && item.kind === 'phrase';
+
+    // Build a weighted pool based on maturity.
+    const pool = [];
+    if (enabled.recognize) pool.push('recognize');
+    if (isTemplate && enabled['template-fill']) {
+      pool.push('template-fill', 'template-fill'); // double weight for templates
+    }
+    if (count >= 1 && enabled.listen)  pool.push('listen');
+    if (count >= 2 && hasCloze && enabled.cloze) pool.push('cloze');
+    if (count >= 3 && enabled.produce && !isTemplate) pool.push('produce');
+    // Mature cards (≥6 reviews) get harder modes more often.
+    if (count >= 6) {
+      if (enabled.produce && !isTemplate) pool.push('produce');
+      if (enabled.cloze && hasCloze) pool.push('cloze');
+    }
+    if (!pool.length) pool.push('recognize');
+
+    // Deterministic-ish: tie mode to (key + reviewCount) so the same review
+    // session shows the same mode for a card even after a state re-render.
+    const seed = (String(card.key) + ':' + count).split('').reduce((s, c) => s + c.charCodeAt(0), 0);
+    return pool[seed % pool.length];
+  }
+
+  function buildClozeFrontAndAnswer(item) {
+    const target = String(item.word || '').trim();
+    const ctx = String(item.templateUsageEn || item.contextEn || '').trim();
+    if (!target || !ctx) return null;
+    // Find the target as a whole-word, case-insensitive.
+    const re = new RegExp('\\b' + target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+    if (!re.test(ctx)) return null;
+    return {
+      front: ctx.replace(re, '_____'),
+      answer: target
+    };
+  }
+
+  function ensureSessionState(reset = false) {
+    if (reset || !state.smartSession) {
+      state.smartSession = {
+        startedAt: Date.now(),
+        counts: { recognize: 0, produce: 0, cloze: 0, listen: 0, 'template-fill': 0 },
+        grades: { again: 0, hard: 0, good: 0, easy: 0 },
+        totalRated: 0,
+        // Queue holds card-IDs in review order; we manage Again re-queueing here.
+        queueIds: [],
+        finishedIds: new Set()
+      };
+    }
+    return state.smartSession;
+  }
+
+  function bumpStreakIfFirstRating() {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const last = localStorage.getItem('jm_review_streak_last') || '';
+      let streak = Number(localStorage.getItem('jm_review_streak_count') || 0);
+      if (last === today) return; // already counted today
+      const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      streak = last === yest ? streak + 1 : 1;
+      localStorage.setItem('jm_review_streak_last', today);
+      localStorage.setItem('jm_review_streak_count', String(streak));
+    } catch {}
+  }
+
+  function getStreak() {
+    return Number(localStorage.getItem('jm_review_streak_count') || 0);
+  }
+
+  function cardId(card) { return `${card.type}:${card.key}`; }
+
   function showReviewCards() {
     openMenu(false);
     state.reviewQueue = getDueReviewCards();
     state.reviewIndex = 0;
     state.reviewRevealed = false;
+    state.reviewTyped = '';
+    state.reviewFeedback = '';
+    ensureSessionState(true);
+    state.smartSession.queueIds = state.reviewQueue.map(cardId);
     $('savedTitle').textContent = 'Smart review cards';
     renderReviewCard();
     openModal('savedModal');
@@ -3315,54 +3498,205 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     state.reviewQueue = [{ type, key: type === 'word' ? (item.key || wordKey(item.word)) : item.key, item: type === 'word' ? normalizeSavedWord(item) : normalizeSavedLine(item) }];
     state.reviewIndex = 0;
     state.reviewRevealed = false;
+    state.reviewTyped = '';
+    state.reviewFeedback = '';
+    ensureSessionState(true);
+    state.smartSession.queueIds = state.reviewQueue.map(cardId);
     $('savedTitle').textContent = type === 'word' ? 'Review word' : 'Review line';
     renderReviewCard();
     openModal('savedModal');
   }
 
-  function renderReviewCard() {
-    const body = $('savedBody');
-    const due = state.reviewQueue;
-    if (!state.savedLines.length && !state.savedWords.length) { body.innerHTML = '<p>No saved words or lines yet.</p>'; return; }
-    if (!due.length) {
-      const all = allReviewItems().sort((a,b)=>new Date(a.item.dueAt)-new Date(b.item.dueAt));
-      const next = all[0]?.item;
-      body.innerHTML = `<div class="review-empty"><b>All cards reviewed ✅</b><p>Next review: ${formatDue(next?.dueAt)}</p><button class="small-btn" data-show-saved-lines>Open saved lines</button></div>`;
-      return;
-    }
-    const card = due[state.reviewIndex] || due[0];
-    const item = card.item;
-    const isWord = card.type === 'word';
-    const front = isWord ? item.word : cleanLine(item.en);
-    const back = item.ar || (isWord ? 'لا توجد ترجمة محفوظة لهذه الكلمة أو العبارة' : 'لا توجد ترجمة محفوظة');
-    const badge = isWord ? (item.kind === 'template' ? 'Template card' : (item.kind === 'phrase' ? 'Phrase card' : 'Word card')) : 'Line card';
-    const reviewContext = isWord ? `${item.templateUsageEn ? `<div class="review-context" dir="ltr">${escapeHtml(item.templateUsageEn)}</div>` : ''}${item.templateUsageAr ? `<div class="review-context ar" dir="rtl">${escapeHtml(item.templateUsageAr)}</div>` : ''}${item.contextEn ? `<div class="review-context" dir="ltr">${escapeHtml(item.contextEn)}</div>` : ''}${item.contextAr ? `<div class="review-context ar" dir="rtl">${escapeHtml(item.contextAr)}</div>` : ''}` : '';
-    body.innerHTML = `<div class="review-card" data-review-key="${escapeHtml(card.key)}" data-review-type="${card.type}">
-      <div class="review-count">${state.reviewIndex + 1} / ${due.length} due • ${badge}</div>
-      <div class="review-front" dir="ltr">${escapeHtml(front)}</div>
-      <div class="review-back ${state.reviewRevealed ? '' : 'hidden'}" dir="rtl">${escapeHtml(back)}${reviewContext}</div>
-      <div class="review-actions">
-        <button class="small-btn" data-review-reveal>Show meaning</button>
-        <button class="small-btn again" data-review-grade="again">Again</button>
-        <button class="small-btn hard" data-review-grade="hard">Hard</button>
-        <button class="small-btn good" data-review-grade="good">Good</button>
-        <button class="small-btn easy" data-review-grade="easy">Easy</button>
-      </div>
+  function renderSmartSessionStats() {
+    const s = state.smartSession;
+    if (!s) return '';
+    const streak = getStreak();
+    return `<div class="smart-stats">
+      <span class="ss-chip"><b>${s.totalRated}</b> rated</span>
+      <span class="ss-chip again">${s.grades.again} again</span>
+      <span class="ss-chip good">${s.grades.good + s.grades.easy} got</span>
+      <span class="ss-chip streak">🔥 ${streak}d streak</span>
     </div>`;
   }
 
+  function renderSmartSettingsPanel() {
+    const { enabled, autoSpeak } = getSmartReviewSettings();
+    const opt = (k, label) => `<label class="mode-chip ${enabled[k] ? 'on' : ''}"><input type="checkbox" data-smart-mode="${k}" ${enabled[k] ? 'checked' : ''}><span>${label}</span></label>`;
+    return `<details class="smart-settings"><summary>⚙️ Card modes</summary>
+      <div class="mode-row">
+        ${opt('recognize', '👁️ Recognize')}
+        ${opt('produce', '⌨️ Produce')}
+        ${opt('cloze', '🧩 Cloze')}
+        ${opt('listen', '🔊 Listen')}
+        ${opt('template-fill', '📐 Template')}
+      </div>
+      <label class="mode-chip wide ${autoSpeak ? 'on' : ''}"><input type="checkbox" data-smart-autospeak ${autoSpeak ? 'checked' : ''}><span>Auto-speak on flip</span></label>
+    </details>`;
+  }
+
+  function renderReviewCard() {
+    const body = $('savedBody');
+    if (!state.savedLines.length && !state.savedWords.length) {
+      body.innerHTML = '<p>No saved words or lines yet.</p>';
+      return;
+    }
+    const due = state.reviewQueue;
+    if (!due.length) {
+      const s = state.smartSession;
+      const stats = s && s.totalRated > 0
+        ? `<div class="session-summary">
+            <div class="ss-line"><b>Total:</b> ${s.totalRated} cards</div>
+            <div class="ss-line"><b>Easy:</b> ${s.grades.easy} · <b>Good:</b> ${s.grades.good} · <b>Hard:</b> ${s.grades.hard} · <b>Again:</b> ${s.grades.again}</div>
+            <div class="ss-line"><b>Retention:</b> ${Math.round(((s.totalRated - s.grades.again) / s.totalRated) * 100)}%</div>
+            <div class="ss-line"><b>🔥 Streak:</b> ${getStreak()} day(s)</div>
+          </div>`
+        : '';
+      const all = allReviewItems().sort((a,b)=>new Date(a.item.dueAt)-new Date(b.item.dueAt));
+      const next = all[0]?.item;
+      body.innerHTML = `<div class="review-empty"><b>All cards reviewed ✅</b>${stats}<p>Next review: ${formatDue(next?.dueAt)}</p><button class="small-btn" data-show-saved-lines>Open saved lines</button></div>`;
+      return;
+    }
+
+    const card = due[state.reviewIndex] || due[0];
+    const item = card.item;
+    const isWord = card.type === 'word';
+    const mode = pickCardMode(card);
+    card.__mode = mode;
+    const en = isWord ? item.word : cleanLine(item.en);
+    const ar = item.ar || (isWord ? 'لا توجد ترجمة محفوظة لهذه الكلمة أو العبارة' : 'لا توجد ترجمة محفوظة');
+    const badge = isWord ? (item.kind === 'template' ? '📐 Template' : (item.kind === 'phrase' ? '💬 Phrase' : '🔤 Word')) : '📜 Line';
+    const modeLabel = ({ recognize: '👁️ Recognize', produce: '⌨️ Produce', cloze: '🧩 Cloze', listen: '🔊 Listen', 'template-fill': '📐 Template fill' })[mode] || mode;
+    const reviewContext = isWord
+      ? `${item.templateUsageEn ? `<div class="review-context" dir="ltr">${escapeHtml(item.templateUsageEn)}</div>` : ''}${item.templateUsageAr ? `<div class="review-context ar" dir="rtl">${escapeHtml(item.templateUsageAr)}</div>` : ''}${item.contextEn ? `<div class="review-context" dir="ltr">${escapeHtml(item.contextEn)}</div>` : ''}${item.contextAr ? `<div class="review-context ar" dir="rtl">${escapeHtml(item.contextAr)}</div>` : ''}`
+      : '';
+
+    // ─── Per-mode FRONT ───
+    let frontHtml = '';
+    let answerHint = ''; // text to validate typed input against, if mode supports typing
+    if (mode === 'recognize') {
+      frontHtml = `<div class="review-front" dir="ltr">${escapeHtml(en)}</div>`;
+    } else if (mode === 'listen') {
+      frontHtml = `<div class="review-front listen-front" dir="ltr">
+        <button class="speak-big" data-review-speak data-speak-text="${escapeHtml(en)}">🔊 Tap to listen</button>
+        <p class="hint-small">Recall the Arabic meaning, then reveal.</p>
+      </div>`;
+    } else if (mode === 'produce') {
+      answerHint = en;
+      const typedAttr = state.reviewTyped ? ` value="${escapeHtml(state.reviewTyped)}"` : '';
+      frontHtml = `<div class="review-front produce-front" dir="rtl">${escapeHtml(ar)}
+        <input class="answer-input" type="text" dir="ltr" placeholder="Type the English…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-review-answer${typedAttr} />
+        <div class="answer-feedback ${state.reviewFeedback || ''}">${
+          state.reviewFeedback === 'exact' ? '✅ Exact match'
+          : state.reviewFeedback === 'almost' ? '🟡 Almost right — check spelling'
+          : state.reviewFeedback === 'wrong' ? '❌ Not quite — reveal and grade yourself'
+          : ''
+        }</div>
+      </div>`;
+    } else if (mode === 'cloze') {
+      const cl = buildClozeFrontAndAnswer(item);
+      if (!cl) {
+        // Fall back to recognize when no usable context exists.
+        frontHtml = `<div class="review-front" dir="ltr">${escapeHtml(en)}</div>`;
+        card.__mode = 'recognize';
+      } else {
+        answerHint = cl.answer;
+        const typedAttr = state.reviewTyped ? ` value="${escapeHtml(state.reviewTyped)}"` : '';
+        frontHtml = `<div class="review-front cloze-front" dir="ltr">${escapeHtml(cl.front)}
+          <input class="answer-input" type="text" dir="ltr" placeholder="Fill in the blank…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-review-answer${typedAttr} />
+          <div class="answer-feedback ${state.reviewFeedback || ''}">${
+            state.reviewFeedback === 'exact' ? '✅ Exact match'
+            : state.reviewFeedback === 'almost' ? '🟡 Almost right'
+            : state.reviewFeedback === 'wrong' ? '❌ Not quite' : ''
+          }</div>
+        </div>`;
+      }
+    } else if (mode === 'template-fill') {
+      frontHtml = `<div class="review-front template-front" dir="ltr">
+        <div class="template-pattern">${escapeHtml(item.word)}</div>
+        ${item.templateUsageAr ? `<div class="template-meaning" dir="rtl">${escapeHtml(item.templateUsageAr)}</div>` : ''}
+        <p class="hint-small">Recall a natural English example using this pattern.</p>
+      </div>`;
+    }
+
+    // ─── BACK (always the same: full answer + context) ───
+    const backHtml = `<div class="review-back ${state.reviewRevealed ? '' : 'hidden'}" dir="rtl">
+      <div class="back-main">${escapeHtml(ar)}</div>
+      <div class="back-en" dir="ltr">${escapeHtml(en)}</div>
+      ${reviewContext}
+    </div>`;
+
+    body.innerHTML = `${renderSmartSessionStats()}
+      ${renderSmartSettingsPanel()}
+      <div class="review-card" data-review-key="${escapeHtml(card.key)}" data-review-type="${card.type}" data-review-mode="${mode}" data-answer="${escapeHtml(answerHint)}">
+        <div class="review-count">${state.reviewIndex + 1} / ${due.length} due · ${badge} · <span class="mode-tag">${modeLabel}</span></div>
+        ${frontHtml}
+        <div class="card-toolbar">
+          <button class="small-btn speak-btn" data-review-speak data-speak-text="${escapeHtml(en)}" title="Speak">🔊</button>
+          ${answerHint ? `<button class="small-btn check-btn" data-review-check>Check</button>` : ''}
+          ${!state.reviewRevealed ? `<button class="small-btn reveal-btn" data-review-reveal>Show meaning</button>` : ''}
+        </div>
+        ${backHtml}
+        <div class="review-actions">
+          <button class="small-btn again" data-review-grade="again">Again</button>
+          <button class="small-btn hard" data-review-grade="hard">Hard</button>
+          <button class="small-btn good" data-review-grade="good">Good</button>
+          <button class="small-btn easy" data-review-grade="easy">Easy</button>
+        </div>
+      </div>`;
+
+    // Auto-speak on flip for listen mode (also if user enabled global auto-speak).
+    if (mode === 'listen' || (state.reviewRevealed && getSmartReviewSettings().autoSpeak)) {
+      try { setTimeout(() => speakText(en), 80); } catch {}
+    }
+
+    // Focus the answer input for produce/cloze so the user can start typing
+    // immediately, and put the caret at the end if there's preserved text.
+    if (mode === 'produce' || mode === 'cloze') {
+      setTimeout(() => {
+        const input = body.querySelector('[data-review-answer]');
+        if (input) {
+          input.focus();
+          try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+        }
+      }, 30);
+    }
+  }
+
+  // Improved SRS: ±15% fuzz for intervals ≥ 7d, cap at 365d, mature lapse
+  // halves the interval instead of zeroing it so a single slip doesn't undo
+  // months of work.
   function applyReviewGrade(item, grade) {
     const now = new Date();
     item.reviewCount = Number(item.reviewCount || 0) + 1;
     item.lastReviewedAt = now.toISOString();
     let interval = Number(item.intervalDays || 0);
     let ease = Number(item.ease || 2.5);
-    if (grade === 'again') { interval = 0; ease = Math.max(1.3, ease - .25); item.dueAt = new Date(now.getTime() + 10*60000).toISOString(); }
-    else {
-      if (grade === 'hard') { interval = interval ? Math.max(1, Math.round(interval * 1.2)) : 1; ease = Math.max(1.3, ease - .15); }
-      if (grade === 'good') { interval = interval ? Math.round(interval * ease) : 1; }
-      if (grade === 'easy') { interval = interval ? Math.round(interval * (ease + .8)) : 3; ease += .15; }
-      item.intervalDays = interval; item.ease = ease; item.dueAt = new Date(now.getTime() + interval*86400000).toISOString();
+    const MIN_EASE = 1.3;
+    const MAX_INTERVAL = 365;
+    const fuzz = (iv) => {
+      if (iv < 7) return iv;
+      const delta = (Math.random() * 2 - 1) * iv * 0.15;
+      return Math.max(1, Math.round(iv + delta));
+    };
+    const clamp = (iv) => Math.min(MAX_INTERVAL, Math.max(0, iv));
+
+    if (grade === 'again') {
+      ease = Math.max(MIN_EASE, ease - 0.25);
+      // Mature card: keep half the interval, mark a 10-minute relearning step.
+      // Young card: full reset like before.
+      const isMature = interval >= 21;
+      interval = isMature ? Math.max(1, Math.round(interval * 0.5)) : 0;
+      item.intervalDays = interval;
+      item.ease = ease;
+      item.dueAt = new Date(now.getTime() + 10 * 60000).toISOString();
+    } else {
+      if (grade === 'hard')  { interval = interval ? Math.max(1, Math.round(interval * 1.2)) : 1; ease = Math.max(MIN_EASE, ease - 0.15); }
+      if (grade === 'good')  { interval = interval ? Math.round(interval * ease)             : 1; }
+      if (grade === 'easy')  { interval = interval ? Math.round(interval * (ease + 0.8))     : 3; ease += 0.15; }
+      interval = clamp(fuzz(interval));
+      item.intervalDays = interval;
+      item.ease = ease;
+      item.dueAt = new Date(now.getTime() + interval * 86400000).toISOString();
     }
   }
 
@@ -3371,11 +3705,39 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     if (type === 'word' || String(key).startsWith('word:')) item = state.savedWords.find(x => (x.key || wordKey(x.word)) === key);
     else item = state.savedLines.find(x => x.key === key);
     if (!item) return;
+
+    const sess = ensureSessionState();
+    sess.totalRated++;
+    sess.grades[grade] = (sess.grades[grade] || 0) + 1;
+    const cur = state.reviewQueue[state.reviewIndex];
+    if (cur?.__mode) sess.counts[cur.__mode] = (sess.counts[cur.__mode] || 0) + 1;
+    bumpStreakIfFirstRating();
+
     applyReviewGrade(item, grade);
     state.savedWords = state.savedWords.map(normalizeSavedWord).filter(x => x.word);
     state.savedLines = state.savedLines.map(normalizeSavedLine);
-    writeJSON('jm_saved_words', state.savedWords); writeJSON('jm_saved_lines', state.savedLines); scheduleCloudLibrarySync();
-    state.reviewQueue = getDueReviewCards(); state.reviewIndex = 0; state.reviewRevealed = false; renderReviewCard();
+    writeJSON('jm_saved_words', state.savedWords);
+    writeJSON('jm_saved_lines', state.savedLines);
+    scheduleCloudLibrarySync();
+
+    // Re-queueing: Again cards bubble back into THIS session 3–5 slots ahead
+    // so the user actually re-sees them (proper SRS behaviour).
+    if (grade === 'again' && state.reviewQueue.length > 1) {
+      const card = state.reviewQueue.splice(state.reviewIndex, 1)[0];
+      const rest = state.reviewQueue.length;
+      const insertAt = Math.min(rest, state.reviewIndex + 3 + Math.floor(Math.random() * 3));
+      state.reviewQueue.splice(insertAt, 0, card);
+      // Stay on the SAME index so we land on the next card.
+    } else {
+      state.reviewQueue.splice(state.reviewIndex, 1);
+      // Keep the same index — splice shifts the next card into our slot.
+      if (state.reviewIndex >= state.reviewQueue.length) state.reviewIndex = 0;
+    }
+
+    state.reviewRevealed = false;
+    state.reviewTyped = '';
+    state.reviewFeedback = '';
+    renderReviewCard();
   }
 
 
@@ -3744,9 +4106,57 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     const cloudDelete = e.target.closest('[data-cloud-delete]'); if (cloudDelete) { deleteCloudLesson(cloudDelete.dataset.cloudDelete); return; }
     if (e.target.closest('[data-review-reveal]')) { state.reviewRevealed = true; renderReviewCard(); return; }
     const gradeBtn = e.target.closest('[data-review-grade]'); if (gradeBtn) { const card = e.target.closest('[data-review-key]'); if (card) gradeReview(card.dataset.reviewKey, gradeBtn.dataset.reviewGrade, card.dataset.reviewType || ''); return; }
+    // Smart-card extras: TTS speak, check typed answer, mode toggles
+    const speakBtn = e.target.closest('[data-review-speak]');
+    if (speakBtn) {
+      const text = speakBtn.dataset.speakText || e.target.closest('[data-review-key]')?.querySelector('.review-front')?.textContent || '';
+      speakText(text);
+      return;
+    }
+    if (e.target.closest('[data-review-check]')) {
+      const card = e.target.closest('[data-review-key]');
+      const input = card?.querySelector('[data-review-answer]');
+      const expected = card?.dataset.answer || '';
+      if (input) {
+        state.reviewTyped = input.value;
+        state.reviewFeedback = validateAnswer(input.value, expected);
+        // Auto-reveal on exact match — saves a tap.
+        if (state.reviewFeedback === 'exact') state.reviewRevealed = true;
+        renderReviewCard();
+      }
+      return;
+    }
+    const modeChk = e.target.closest('[data-smart-mode]');
+    if (modeChk) {
+      const k = modeChk.dataset.smartMode;
+      const cur = getSmartReviewSettings();
+      setSmartReviewSettings({ enabled: { ...cur.enabled, [k]: modeChk.checked } });
+      renderReviewCard();
+      return;
+    }
+    if (e.target.closest('[data-smart-autospeak]')) {
+      const cb = e.target.closest('[data-smart-autospeak]');
+      setSmartReviewSettings({ autoSpeak: cb.checked });
+      return;
+    }
     if (e.target.closest('[data-show-saved-lines]')) { showSaved('lines'); return; }
     if (!e.target.closest('.line-action-menu')) hideLineActionMenus();
     if (e.target.matches('[data-close-modal]')) closeModal(e.target.dataset.closeModal);
+  });
+
+  // Enter key inside the smart-card answer input → trigger Check, just like
+  // the on-screen button. Keeps the user's hands on the keyboard.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const input = e.target.closest('[data-review-answer]');
+    if (!input) return;
+    e.preventDefault();
+    const card = e.target.closest('[data-review-key]');
+    const expected = card?.dataset.answer || '';
+    state.reviewTyped = input.value;
+    state.reviewFeedback = validateAnswer(input.value, expected);
+    if (state.reviewFeedback === 'exact') state.reviewRevealed = true;
+    renderReviewCard();
   });
 
   $('menuBtn').onclick = () => openMenu(true); $('closeMenuBtn').onclick = () => openMenu(false); document.querySelector('.sheet-backdrop').onclick = () => openMenu(false);
