@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Jungle Movie Lite - OpenRouter AI</title>
-  <link rel="stylesheet" href="./style.css?v=openrouter-free-v1" />
+  <link rel="stylesheet" href="./style.css?v=organized-menu-v2" />
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -81,51 +81,105 @@
         <b>Menu</b>
         <button id="closeMenuBtn" class="icon-btn">×</button>
       </div>
-      <div class="menu-grid">
-        <button id="menuUploadSrt">Upload / change SRT</button>
-        <button id="menuAzure">Translate all with Azure</button>
-        <button id="menuLaraAll">Translate all with OpenRouter AI</button>
-        <button id="menuLaraSettings">Lara backup settings</button>
-        <button id="menuAiTemplateSettings">OpenRouter AI settings</button>
-        <button id="menuSavedWords">Saved words</button>
-        <button id="menuSavedPhrases">Saved phrases</button>
-        <button id="menuSavedTemplates">Saved templates</button>
-        <button id="menuSavedLines">Saved lines</button>
-        <button id="menuReviewCards">Review cards</button>
-        <button id="menuExtractTemplates">Extract templates</button>
-        <button id="menuSaveCloud">Save lesson to cloud</button>
-        <button id="menuSyncSavedCloud">Sync saved items</button>
-        <button id="menuLoadSavedCloud">Load saved items</button>
-        <button id="menuCloudLibrary">Cloud library</button>
-        <button id="menuRecoverVideo">Recover video</button>
-        <button id="menuCacheVideo">Cache video</button>
-        <button id="menuUseCache">Use cached video</button>
-        <button id="menuClearCache">Clear video cache</button>
-        <button id="menuClear">New lesson</button>
+
+      <input id="menuSearchInput" class="menu-search" type="search" placeholder="🔎 Search menu…" autocomplete="off" />
+
+      <div class="menu-sections" id="menuSections">
+
+        <details open class="menu-section" data-section="lesson">
+          <summary>
+            <span class="sec-title"><span class="sec-icon">🎬</span> Lesson</span>
+            <span class="sec-chev">▾</span>
+          </summary>
+          <div class="menu-grid">
+            <button id="menuUploadSrt" class="m-btn" data-label="Upload change SRT subtitle file"><span class="m-icon">📄</span>Upload / change SRT</button>
+            <button id="menuClear" class="m-btn" data-label="New lesson clear"><span class="m-icon">🆕</span>New lesson</button>
+            <button id="menuPuterAll" class="m-btn primary" data-label="Translate all subtitles Puter AI Egyptian"><span class="m-icon">🎙️</span>Translate all (Puter AI)</button>
+            <button id="menuAzure" class="m-btn" data-label="Translate all subtitles Azure"><span class="m-icon">🧠</span>Translate all (Azure)</button>
+          </div>
+        </details>
+
+        <details class="menu-section" data-section="saved">
+          <summary>
+            <span class="sec-title"><span class="sec-icon">📚</span> Saved library</span>
+            <span class="sec-chev">▾</span>
+          </summary>
+          <div class="menu-grid">
+            <button id="menuSavedWords" class="m-btn" data-label="Saved words dictionary"><span class="m-icon">🔤</span>Words</button>
+            <button id="menuSavedPhrases" class="m-btn" data-label="Saved phrases chunks"><span class="m-icon">💬</span>Phrases</button>
+            <button id="menuSavedTemplates" class="m-btn" data-label="Saved templates patterns"><span class="m-icon">📐</span>Templates</button>
+            <button id="menuSavedLines" class="m-btn" data-label="Saved lines subtitle bookmarks"><span class="m-icon">📜</span>Lines</button>
+            <button id="menuReviewCards" class="m-btn" data-label="Review cards SRS due"><span class="m-icon">🔁</span>Review cards</button>
+            <button id="menuExtractTemplates" class="m-btn" data-label="Extract templates all subtitles"><span class="m-icon">🪄</span>Extract templates</button>
+          </div>
+        </details>
+
+        <details class="menu-section" data-section="cloud">
+          <summary>
+            <span class="sec-title"><span class="sec-icon">☁️</span> Cloud sync</span>
+            <span class="sec-chev">▾</span>
+          </summary>
+          <div class="menu-grid">
+            <button id="menuSaveCloud" class="m-btn" data-label="Save lesson to cloud Supabase"><span class="m-icon">💾</span>Save lesson</button>
+            <button id="menuSyncSavedCloud" class="m-btn" data-label="Sync saved items cloud upload"><span class="m-icon">⬆️</span>Sync saved</button>
+            <button id="menuLoadSavedCloud" class="m-btn" data-label="Load saved items cloud download"><span class="m-icon">⬇️</span>Load saved</button>
+            <button id="menuCloudLibrary" class="m-btn" data-label="Cloud library all lessons"><span class="m-icon">🗂️</span>Cloud library</button>
+          </div>
+        </details>
+
+        <details class="menu-section" data-section="cache">
+          <summary>
+            <span class="sec-title"><span class="sec-icon">🎞️</span> Video cache</span>
+            <span class="sec-chev">▾</span>
+          </summary>
+          <div class="menu-grid">
+            <button id="menuCacheVideo" class="m-btn" data-label="Cache video offline download"><span class="m-icon">💿</span>Cache video</button>
+            <button id="menuUseCache" class="m-btn" data-label="Use cached video offline"><span class="m-icon">▶️</span>Use cached</button>
+            <button id="menuRecoverVideo" class="m-btn" data-label="Recover video reload playback"><span class="m-icon">🛟</span>Recover</button>
+            <button id="menuClearCache" class="m-btn danger" data-label="Clear video cache delete"><span class="m-icon">🗑️</span>Clear cache</button>
+          </div>
+        </details>
+
+        <details class="menu-section" data-section="settings">
+          <summary>
+            <span class="sec-title"><span class="sec-icon">⚙️</span> Settings</span>
+            <span class="sec-chev">▾</span>
+          </summary>
+          <div class="menu-grid">
+            <button id="menuAiTemplateSettings" class="m-btn" data-label="OpenRouter AI settings examples templates"><span class="m-icon">🤖</span>OpenRouter (examples)</button>
+            <button id="menuLaraSettings" class="m-btn" data-label="Lara backup settings translation"><span class="m-icon">🔁</span>Lara backup</button>
+          </div>
+        </details>
+
       </div>
-      <div class="control-row">
-        <span>Speed</span>
-        <button id="speedBtn">1.0x</button>
-      </div>
-      <div class="control-row">
-        <span>Sync</span>
-        <div class="sync-controls">
-          <button id="syncMinus">-0.25</button>
-          <b id="syncValue">0.00s</b>
-          <button id="syncPlus">+0.25</button>
+
+      <p id="menuEmptyHint" class="menu-empty-hint hidden">No items match your search.</p>
+
+      <div class="menu-controls">
+        <div class="control-row">
+          <span>Speed</span>
+          <button id="speedBtn">1.0x</button>
         </div>
-      </div>
-      <div class="control-row">
-        <span>Repeat pause</span>
-        <div class="sync-controls">
-          <button id="repeatDelayMinus">-1s</button>
-          <b id="repeatDelayValue">1s</b>
-          <button id="repeatDelayPlus">+1s</button>
+        <div class="control-row">
+          <span>Sync</span>
+          <div class="sync-controls">
+            <button id="syncMinus">-0.25</button>
+            <b id="syncValue">0.00s</b>
+            <button id="syncPlus">+0.25</button>
+          </div>
         </div>
-      </div>
-      <div class="control-row">
-        <span>Auto-pause</span>
-        <button id="autoPauseBtn">Off</button>
+        <div class="control-row">
+          <span>Repeat pause</span>
+          <div class="sync-controls">
+            <button id="repeatDelayMinus">-1s</button>
+            <b id="repeatDelayValue">1s</b>
+            <button id="repeatDelayPlus">+1s</button>
+          </div>
+        </div>
+        <div class="control-row">
+          <span>Auto-pause</span>
+          <button id="autoPauseBtn">Off</button>
+        </div>
       </div>
       <p id="menuStatus" class="menu-status"></p>
     </div>
@@ -198,10 +252,10 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="https://js.puter.com/v2/"></script>
-  <script src="./app.js?v=openrouter-free-v1"></script>
+  <script src="./app.js?v=organized-menu-v2"></script>
   <script>
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=openrouter-free-v1').then(r => r.update()).catch(() => {}));
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=organized-menu-v2').then(r => r.update()).catch(() => {}));
     }
   </script>
 </body>

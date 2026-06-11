@@ -1626,16 +1626,10 @@ RULES:
     throw lastError || new Error('Puter AI subtitle batch translation failed.');
   }
 
+  // Subtitle translation is Puter AI only (natural, Egyptian-friendly).
+  // OpenRouter is reserved for fetching template examples elsewhere.
+  // MyMemory remains the last-resort fallback in case Puter is unreachable.
   async function translateSubtitlePreferred(text) {
-    const cfg = getOpenRouterConfig();
-    if (cfg.apiKey) {
-      try {
-        return await translateOpenRouterSubtitle(text);
-      } catch (e) {
-        console.warn('OpenRouter subtitle translation unavailable. Falling back to Puter AI:', e);
-        setStatus('OpenRouter unavailable. Puter AI fallback is active.');
-      }
-    }
     try {
       return await translatePuterSubtitle(text);
     } catch (e) {
@@ -1647,16 +1641,6 @@ RULES:
   }
 
   async function translateSubtitlePreferredItems(items) {
-    const cfg = getOpenRouterConfig();
-    if (cfg.apiKey) {
-      try {
-        const rows = await translateOpenRouterSubtitleItems(items);
-        if (rows.length) return rows;
-      } catch (e) {
-        console.warn('OpenRouter subtitle batch unavailable. Falling back to Puter AI:', e);
-        setStatus('OpenRouter batch unavailable. Puter AI fallback is active.');
-      }
-    }
     try {
       return await translatePuterSubtitleItems(items);
     } catch (e) {
@@ -1673,20 +1657,99 @@ RULES:
     return [];
   }
 
+  // Build a Puter-AI prompt that asks for natural Egyptian-Arabic translations
+  // of template examples. Returns JSON keyed by index.
+  function buildPuterExampleBatchPrompt(items) {
+    const rows = (items || [])
+      .map(x => ({ index: Number(x.index), en: cleanLine(x.en || x.text || '') }))
+      .filter(x => x.en);
+    return `You are translating short English example sentences for an Arabic learner.
+
+Translate each English sentence into NATURAL EVERYDAY ARABIC that leans toward EGYPTIAN COLLOQUIAL ARABIC (المصرية الدارجة).
+- Make it sound like how a real Egyptian friend would say it in daily life.
+- Keep slang, jokes, and emotional tone.
+- Do NOT use stiff formal Modern Standard Arabic.
+- Do NOT add explanations or transliteration.
+- Keep each translation short (subtitle-length).
+
+Return JSON only in this exact shape:
+{"translations":[${rows.map(r => `{"index":${r.index},"ar":"<egyptian arabic translation>"}`).join(',')}]}
+
+ENGLISH ITEMS:
+${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
+  }
+
+  // Batch-translate English template examples to Arabic via Puter AI, with
+  // an Egyptian-dialect bias. Falls back to MyMemory on failure.
+  async function translateTemplateExamplesWithPuter(examples) {
+    const items = (examples || [])
+      .map((ex, index) => ({ index, en: cleanLine(ex?.en || '') }))
+      .filter(x => x.en);
+    if (!items.length) return [];
+    if (!window.puter?.ai?.chat) throw new Error('Puter AI is not loaded.');
+    const prompt = buildPuterExampleBatchPrompt(items);
+    let lastError = null;
+    for (const model of PUTER_SUBTITLE_MODELS) {
+      try {
+        const response = await window.puter.ai.chat(prompt, {
+          model,
+          temperature: 0.35,
+          max_tokens: Math.min(1400, 200 + items.length * 140)
+        });
+        const text = puterResponseToText(response);
+        const parsed = parseJsonLoose(text);
+        const rawList = Array.isArray(parsed)
+          ? parsed
+          : (Array.isArray(parsed?.translations) ? parsed.translations : []);
+        const rows = rawList
+          .map(x => ({ index: Number(x?.index), ar: cleanPuterArabicTranslation(x?.ar || x?.arabic || x?.translation || '') }))
+          .filter(x => Number.isFinite(x.index) && x.ar);
+        if (rows.length) return rows;
+      } catch (e) {
+        lastError = e;
+        console.warn('Puter example batch translation failed with model', model, e);
+      }
+    }
+    throw lastError || new Error('Puter AI example translation failed.');
+  }
+
+  // Public entry point used after examples are generated. Tries Puter AI first
+  // (Egyptian dialect, much more natural), then MyMemory as a fallback.
+  // The original name is preserved so existing callers keep working.
   async function translateTemplateExamplesWithMyMemory(examples) {
     const list = sanitizeTemplateExamples(examples || []);
     if (!list.length) return [];
     const need = list.map((ex, index) => ({ ex, index })).filter(x => !x.ex.ar || looksLikeTemplatePlaceholderArabic(x.ex.ar));
     if (!need.length) return list.slice(0, 3);
+
+    // Puter AI first — natural Egyptian-style Arabic.
     try {
-      const translated = await translateMyMemoryItems(need.map(x => ({ index: x.index, text: x.ex.en })));
+      const rows = await translateTemplateExamplesWithPuter(need.map(x => ({ index: x.index, en: x.ex.en })));
+      const map = new Map((rows || []).map(r => [Number(r.index), r.ar]));
+      let filled = 0;
+      for (const { ex, index } of need) {
+        const ar = map.get(Number(index));
+        if (ar) { ex.ar = cleanLine(ar); filled++; }
+      }
+      if (filled >= need.length) return list.slice(0, 3);
+    } catch (e) {
+      console.warn('Puter example translation unavailable. Falling back to MyMemory:', e);
+    }
+
+    // MyMemory fallback for whichever examples Puter couldn't translate.
+    const stillNeed = list
+      .map((ex, index) => ({ ex, index }))
+      .filter(x => !x.ex.ar || looksLikeTemplatePlaceholderArabic(x.ex.ar));
+    if (!stillNeed.length) return list.slice(0, 3);
+    try {
+      const translated = await translateMyMemoryItems(stillNeed.map(x => ({ index: x.index, text: x.ex.en })));
       for (const row of translated || []) {
         const idx = Number(row.index);
         if (list[idx] && row.ar) list[idx].ar = cleanLine(row.ar);
       }
     } catch (e) {
       console.warn('MyMemory template example translation failed:', e);
-      for (const row of need) {
+      for (const row of stillNeed) {
         try { row.ex.ar = await translateMyMemory(row.ex.en); } catch {}
       }
     }
@@ -3687,12 +3750,70 @@ RULES:
   });
 
   $('menuBtn').onclick = () => openMenu(true); $('closeMenuBtn').onclick = () => openMenu(false); document.querySelector('.sheet-backdrop').onclick = () => openMenu(false);
+
+  // Menu search: live-filter buttons by label/text. Auto-expands any section
+  // that contains a match and collapses ones that don't, so the user can scan
+  // results without scrolling through every section.
+  (function wireMenuSearch() {
+    const input = $('menuSearchInput'); if (!input) return;
+    const sectionsEl = $('menuSections');
+    const emptyHint = $('menuEmptyHint');
+    const defaultOpen = new Set(['lesson']);
+
+    function applyFilter(raw) {
+      const q = String(raw || '').trim().toLowerCase();
+      const sections = sectionsEl?.querySelectorAll('.menu-section') || [];
+      let anyVisible = false;
+
+      sections.forEach(sec => {
+        const buttons = sec.querySelectorAll('.m-btn');
+        let visibleInSection = 0;
+        buttons.forEach(btn => {
+          if (!q) {
+            btn.classList.remove('hidden', 'search-match');
+            visibleInSection++;
+            return;
+          }
+          const hay = (btn.textContent + ' ' + (btn.dataset.label || '')).toLowerCase();
+          const match = hay.includes(q);
+          btn.classList.toggle('hidden', !match);
+          btn.classList.toggle('search-match', match);
+          if (match) visibleInSection++;
+        });
+
+        sec.classList.toggle('search-hidden', q && visibleInSection === 0);
+        if (q) {
+          sec.open = visibleInSection > 0;
+        } else {
+          sec.open = defaultOpen.has(sec.dataset.section);
+        }
+        if (visibleInSection > 0) anyVisible = true;
+      });
+
+      if (emptyHint) emptyHint.classList.toggle('hidden', !q || anyVisible);
+    }
+
+    input.addEventListener('input', e => applyFilter(e.target.value));
+    // Reset filter every time the menu opens so the user starts from a clean slate.
+    const origOpenMenu = openMenu;
+    window.__resetMenuSearch = () => { input.value = ''; applyFilter(''); };
+    // Patch openMenu by wrapping the existing click handlers.
+    const menuBtnEl = $('menuBtn');
+    if (menuBtnEl) {
+      const prev = menuBtnEl.onclick;
+      menuBtnEl.onclick = (e) => { window.__resetMenuSearch?.(); return prev?.call(menuBtnEl, e); };
+    }
+  })();
+
   $('urlBtn').onclick = () => openModal('urlModal'); $('loadUrlBtn').onclick = () => loadUrl($('videoUrlInput').value);
   $('videoFileInput').onchange = e => { const f = e.target.files[0]; if (f) loadUrl(URL.createObjectURL(f)); };
   $('subtitleFileInput').onchange = e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => handleSubtitleContent(r.result); r.readAsText(f); };
   $('menuUploadSrt').onclick = () => { openMenu(false); $('subtitleFileInput').click(); };
   $('menuAzure').onclick = translateAllAzure;
-  $('menuLaraAll').onclick = translateAllLara;
+  // menuLaraAll (Translate all with OpenRouter AI) was removed — subtitle
+  // translation now runs through Puter AI per-line on demand. translateAllPuter()
+  // is still defined so the Azure path / saved-cloud flows keep working.
+  if ($('menuPuterAll')) $('menuPuterAll').onclick = translateAllPuter;
   $('menuLaraSettings').onclick = () => openLaraSettings();
   if ($('menuAiTemplateSettings')) $('menuAiTemplateSettings').onclick = () => openChatLlmSettings();
   $('menuSavedWords').onclick = () => { openMenu(false); showSaved('words'); };

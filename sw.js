@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-openrouter-free-v1';
-const ASSETS = ['./', './index.html', './style.css?v=openrouter-free-v1', './app.js?v=openrouter-free-v1'];
+const CACHE_NAME = 'jungle-movie-organized-menu-v2';
+const ASSETS = ['./', './index.html', './style.css?v=organized-menu-v2', './app.js?v=organized-menu-v2'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

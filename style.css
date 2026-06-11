@@ -57,3 +57,40 @@
 
 /* Saved templates cleanup tools */
 .template-clean-actions{margin-top:10px}.delete-hint{color:#991b1b!important}.saved-select-check{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:26px;height:26px;border:1px solid #fecaca;background:#fff7f7;border-radius:9px;cursor:pointer}.saved-select-check input{width:16px;height:16px;accent-color:#ef4444;cursor:pointer}.template-item summary{gap:7px}.template-item .saved-actions .danger{font-weight:900}
+
+/* ──────────────────────────────────────────────────────────────
+   Organized menu — collapsible sections, search, mobile-friendly
+   Overrides the older flat .menu-grid styling for buttons inside
+   .menu-section so the new colour scheme + tap targets stick.
+   ────────────────────────────────────────────────────────────── */
+.menu-search{width:100%;border:1px solid #e5e7eb;background:#f8fafc;border-radius:14px;padding:11px 14px;margin:8px 0 4px;font-size:14px;font-weight:600;color:#0f172a;outline:none;-webkit-appearance:none}
+.menu-search:focus{border-color:#10b981;background:#fff;box-shadow:0 0 0 3px rgba(16,185,129,.15)}
+.menu-sections{display:flex;flex-direction:column;gap:8px;margin:10px 0 4px;max-height:55vh;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px}
+.menu-section{background:#f8fafc;border:1px solid #eef2f7;border-radius:16px;overflow:hidden;transition:box-shadow .15s}
+.menu-section[open]{background:#fff;box-shadow:0 4px 14px rgba(15,23,42,.06);border-color:#e2e8f0}
+.menu-section>summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;font-weight:900;font-size:14px;color:#0f172a;-webkit-tap-highlight-color:rgba(16,185,129,.08);user-select:none}
+.menu-section>summary::-webkit-details-marker{display:none}
+.menu-section>summary:active{background:#f1f5f9}
+.menu-section .sec-title{display:flex;align-items:center;gap:8px;min-width:0}
+.menu-section .sec-icon{font-size:18px;line-height:1}
+.menu-section .sec-chev{color:#94a3b8;font-weight:900;transition:transform .2s ease}
+.menu-section[open]>summary .sec-chev{transform:rotate(180deg);color:#10b981}
+.menu-section .menu-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:4px 10px 12px;margin:0}
+.menu-section .m-btn{border:0;background:#fff;color:#0f172a;border-radius:14px;padding:14px 10px;font-weight:800;font-size:13px;min-height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;text-align:center;line-height:1.25;box-shadow:0 2px 6px rgba(15,23,42,.06);transition:transform .08s,box-shadow .15s;-webkit-tap-highlight-color:rgba(16,185,129,.12)}
+.menu-section .m-btn:active{transform:scale(.97);box-shadow:0 1px 3px rgba(15,23,42,.08)}
+.menu-section .m-btn .m-icon{font-size:20px;line-height:1}
+.menu-section .m-btn.primary{background:#ecfdf5;color:#047857;box-shadow:0 4px 12px rgba(16,185,129,.18)}
+.menu-section .m-btn.danger{background:#fef2f2;color:#991b1b;box-shadow:0 4px 12px rgba(239,68,68,.12)}
+.menu-section .m-btn.hidden{display:none}
+.menu-section.search-hidden{display:none}
+.menu-empty-hint{text-align:center;color:#64748b;font-size:13px;font-weight:700;padding:14px 4px;margin:0}
+.menu-empty-hint.hidden{display:none}
+.menu-controls{margin-top:10px;border-top:1px solid #eef2f7;padding-top:4px}
+/* Tighter spacing + single column on very narrow phones */
+@media(max-width:420px){
+  .menu-section .menu-grid{gap:7px;padding:4px 8px 10px}
+  .menu-section .m-btn{padding:12px 8px;min-height:52px;font-size:12px}
+  .menu-section .m-btn .m-icon{font-size:18px}
+}
+/* Visual highlight for search matches */
+.menu-section .m-btn.search-match{outline:2px solid #10b981;outline-offset:-2px;background:#f0fdf4}
