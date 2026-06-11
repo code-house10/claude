@@ -63,9 +63,12 @@
    Overrides the older flat .menu-grid styling for buttons inside
    .menu-section so the new colour scheme + tap targets stick.
    ────────────────────────────────────────────────────────────── */
+/* Make the whole sheet panel scroll instead of clipping inside the section
+   list — opening a section with many buttons must reveal all of them. */
+#menuSheet .sheet-panel{max-height:92vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .menu-search{width:100%;border:1px solid #e5e7eb;background:#f8fafc;border-radius:14px;padding:11px 14px;margin:8px 0 4px;font-size:14px;font-weight:600;color:#0f172a;outline:none;-webkit-appearance:none}
 .menu-search:focus{border-color:#10b981;background:#fff;box-shadow:0 0 0 3px rgba(16,185,129,.15)}
-.menu-sections{display:flex;flex-direction:column;gap:8px;margin:10px 0 4px;max-height:55vh;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px}
+.menu-sections{display:flex;flex-direction:column;gap:8px;margin:10px 0 4px}
 .menu-section{background:#f8fafc;border:1px solid #eef2f7;border-radius:16px;overflow:hidden;transition:box-shadow .15s}
 .menu-section[open]{background:#fff;box-shadow:0 4px 14px rgba(15,23,42,.06);border-color:#e2e8f0}
 .menu-section>summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;font-weight:900;font-size:14px;color:#0f172a;-webkit-tap-highlight-color:rgba(16,185,129,.08);user-select:none}
