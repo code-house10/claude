@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "start": "vercel dev"
+  },
+  "dependencies": {
+    "@translated/lara": "latest"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}
