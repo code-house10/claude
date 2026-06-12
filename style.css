@@ -255,3 +255,37 @@
 .word.cefr:not(.active):not(:hover){background:rgba(234,88,12,.15);box-shadow:inset 0 -2px 0 rgba(234,88,12,.85);color:inherit;font-weight:900}
 .dock-en .word.cefr:not(.active):not(:hover){background:rgba(251,146,60,.28);box-shadow:inset 0 -2px 0 rgba(251,146,60,.95)}
 .dict-context .word.cefr:not(.active):not(:hover){background:rgba(234,88,12,.15);box-shadow:inset 0 -2px 0 rgba(234,88,12,.85)}
+/* Teal tier: connected-speech reductions (gonna, wanna, gotcha…). Tap = explanation. */
+.word.reduction:not(.active):not(:hover){background:rgba(13,148,136,.16);box-shadow:inset 0 -2px 0 rgba(13,148,136,.85);color:inherit;font-style:italic}
+.dock-en .word.reduction:not(.active):not(:hover){background:rgba(45,212,191,.28);box-shadow:inset 0 -2px 0 rgba(45,212,191,.95)}
+.dict-context .word.reduction:not(.active):not(:hover){background:rgba(13,148,136,.16);box-shadow:inset 0 -2px 0 rgba(13,148,136,.85)}
+
+/* Dict CEFR/POS badges (shown above the translation) */
+.dict-meta{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
+.cefr-badge{display:inline-block;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:900;color:#fff}
+.cefr-badge.lvl-A1{background:#10b981}.cefr-badge.lvl-A2{background:#059669}
+.cefr-badge.lvl-B1{background:#0284c7}.cefr-badge.lvl-B2{background:#1d4ed8}
+.cefr-badge.lvl-C1{background:#7c3aed}.cefr-badge.lvl-C2{background:#be185d}
+.pos-badge{display:inline-block;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0}
+
+/* Connected-speech modal */
+.reduction-body{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.red-group{background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden}
+.red-group>summary{list-style:none;cursor:pointer;padding:11px 14px;font-weight:900;font-size:13px;color:#0f172a;display:flex;justify-content:space-between;align-items:center}
+.red-group>summary::-webkit-details-marker{display:none}
+.red-group>summary::after{content:'▾';color:#94a3b8;transition:transform .2s}
+.red-group[open]>summary::after{transform:rotate(180deg);color:#0d9488}
+.red-count{background:#e2e8f0;color:#475569;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:900}
+.red-card{background:#fff;border:1px solid #ccfbf1;border-radius:14px;padding:11px 13px;margin:8px 12px;box-shadow:0 2px 6px rgba(13,148,136,.06)}
+.red-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.red-forms{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.red-full{font-weight:800;color:#0f172a;direction:ltr}
+.red-arrow{color:#0d9488;font-weight:900}
+.red-connected{background:rgba(13,148,136,.13);color:#0f766e;font-weight:900;border-radius:8px;padding:2px 8px;direction:ltr;font-style:italic}
+.red-pron{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;font-size:12px;font-weight:700;color:#475569}
+.red-ex{margin-top:7px;font-size:13px;font-weight:700;color:#0f172a;direction:ltr;line-height:1.5}
+.red-mean{margin-top:5px;color:#0f766e;font-weight:800;font-size:13px;line-height:1.5}
+.red-pattern{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 12px;margin:6px 12px}
+.red-pattern b{display:block;color:#0f172a;font-size:13px;margin-bottom:3px;direction:ltr}
+.red-pattern p{margin:2px 0;font-size:12px;line-height:1.5;color:#475569;font-weight:700}
+.red-pattern-ex{color:#0f766e!important;font-style:italic;direction:ltr}

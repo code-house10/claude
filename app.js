@@ -4986,6 +4986,7 @@ Return JSON ONLY, no extra text, in exactly this shape:
     }
     const openTermBtn = e.target.closest('[data-open-term]'); if (openTermBtn) { openDict(openTermBtn.dataset.openTerm, Number(openTermBtn.dataset.index)); return; }
     const speakExBtn = e.target.closest('[data-speak-ex]'); if (speakExBtn) { speak(speakExBtn.dataset.speakEx); return; }
+    if (e.target.closest('[data-open-connected]')) { closeModal('reductionModal'); showConnectedSpeech(); return; }
     const savePhrase = e.target.closest('[data-save-phrase]'); if (savePhrase) { savePhraseFromSubtitle(savePhrase.dataset.savePhrase, Number(savePhrase.dataset.index)); return; }
     const refreshOneTemplate = e.target.closest('[data-refresh-template-examples]'); if (refreshOneTemplate) { refreshTemplateExamplesByIndex(refreshOneTemplate.dataset.refreshTemplateExamples); return; }
     const refreshAllTemplates = e.target.closest('[data-refresh-all-template-examples]'); if (refreshAllTemplates) { refreshAllTemplateExamples(); return; }
@@ -5129,6 +5130,7 @@ Return JSON ONLY, no extra text, in exactly this shape:
   if ($('menuExtractTemplates')) $('menuExtractTemplates').onclick = saveTemplatesFromAllSubtitles;
   $('menuSavedLines').onclick = () => { openMenu(false); showSaved('lines'); };
   $('menuReviewCards').onclick = showReviewCards;
+  if ($('menuConnectedSpeech')) $('menuConnectedSpeech').onclick = showConnectedSpeech;
   if ($('menuSpeakingCoach')) $('menuSpeakingCoach').onclick = () => { openMenu(false); openSpeakingCoach(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0); };
   $('menuSaveCloud').onclick = saveLessonToCloud;
   if ($('menuSyncSavedCloud')) $('menuSyncSavedCloud').onclick = () => { openMenu(false); syncSavedItemsToCloud({ silent: false, reason: 'manual' }); };
