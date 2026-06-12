@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-dialogue-practice-v10';
-const ASSETS = ['./', './index.html', './style.css?v=dialogue-practice-v10', './app.js?v=dialogue-practice-v10', './vocab-data.js?v=dialogue-practice-v10'];
+const CACHE_NAME = 'jungle-movie-dialogue-style-v11';
+const ASSETS = ['./', './index.html', './style.css?v=dialogue-style-v11', './app.js?v=dialogue-style-v11', './vocab-data.js?v=dialogue-style-v11'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

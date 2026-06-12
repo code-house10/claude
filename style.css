@@ -345,11 +345,15 @@
 .d-spkr{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:900;font-size:13px;color:#fff}
 .d-turn.d-a .d-spkr{background:#0ea5e9}
 .d-turn.d-b .d-spkr{background:#a855f7}
-.d-turn-body{flex:1;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:10px 12px;position:relative;box-shadow:0 1px 4px rgba(15,23,42,.04)}
+/* Bubble is RTL-parent but holds LTR English; force LTR flow so absolute
+   positioning + start-padding land on the same visual side as the speak btn.
+   Speak button sits at the BOTTOM-RIGHT, fully outside the text rows so it
+   never covers the first word. */
+.d-turn-body{flex:1;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:10px 12px 38px;position:relative;box-shadow:0 1px 4px rgba(15,23,42,.04);direction:ltr;text-align:left}
 .d-turn.d-b .d-turn-body{background:#faf5ff;border-color:#e9d5ff}
-.d-en{font-size:14px;font-weight:800;color:#0f172a;line-height:1.45;direction:ltr;padding-inline-end:32px}
-.d-ar-line{font-size:13px;color:#047857;font-weight:700;margin-top:4px;line-height:1.5;padding-inline-end:32px}
-.d-turn-body .ex-speak{position:absolute;top:8px;inset-inline-end:8px;padding:5px 8px;font-size:12px}
+.d-en{font-size:14px;font-weight:800;color:#0f172a;line-height:1.45;direction:ltr;text-align:left}
+.d-ar-line{font-size:13px;color:#047857;font-weight:700;margin-top:4px;line-height:1.5;direction:rtl;text-align:right}
+.d-turn-body .ex-speak{position:absolute;right:8px;bottom:6px;left:auto;top:auto;padding:5px 9px;font-size:13px}
 mark.d-hit{background:rgba(234,88,12,.18);color:#9a3412;border-bottom:2px solid #ea580c;padding:0 2px;border-radius:4px;font-weight:900}
 
 .d-result-foot{display:flex;gap:8px;justify-content:center;margin-top:10px;padding-top:10px;border-top:1px dashed #e2e8f0}
