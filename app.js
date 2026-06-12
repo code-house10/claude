@@ -44,7 +44,11 @@
     hlsReady: false,
     videoBlobUrl: '',
     usingCachedVideo: false,
-    cacheDbPromise: null
+    cacheDbPromise: null,
+    // High-frequency vocabulary highlighting
+    highlightHF: localStorage.getItem('jm_highlight_hf') !== '0',
+    hfWords: null,     // Set of high-frequency words (top 3000 minus A1 stopwords)
+    hfCount: 0         // distinct highlighted words in the current subtitle file
   };
 
   const el = {
@@ -101,6 +105,139 @@
     if (t.length > 4 && t.endsWith('ed')) return t.slice(0, -2);
     if (t.length > 4 && t.endsWith('s')) return t.slice(0, -1);
     return t;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // HIGH-FREQUENCY VOCABULARY HIGHLIGHTING
+  //
+  // When a subtitle file loads we highlight every word that belongs to the
+  // top ~3000 most frequent English words, EXCEPT the trivial A1 function
+  // words (the, a, an, of, with, …) which a learner already knows. This
+  // focuses attention on the high-value vocabulary worth learning.
+  //
+  // The 3000-word list is the well-known Google Trillion-Word frequency list
+  // (first20hours/google-10000-english, MIT), fetched once from jsDelivr and
+  // cached in localStorage so it works offline afterwards. A small built-in
+  // fallback covers the very first load if the device is offline.
+  // ════════════════════════════════════════════════════════════════
+
+  // Trivial A1 words to EXCLUDE from highlighting (already known by the learner).
+  const A1_STOPWORDS = new Set([
+    'the','a','an','and','or','but','so','if','then','than','as','because','while',
+    'i','you','he','she','it','we','they','me','him','her','us','them',
+    'my','your','his','its','our','their','mine','yours','hers','ours','theirs',
+    'this','that','these','those','here','there',
+    'is','am','are','was','were','be','been','being','do','does','did','done',
+    'have','has','had','will','would','shall','should','can','could','may','might','must',
+    'of','to','in','on','at','by','for','with','from','into','onto','off','out','up','down',
+    'over','under','about','above','below','between','through','during','before','after',
+    'not','no','yes','nor','too','very','just','only','also','even','still','again',
+    'all','any','some','each','every','both','few','more','most','many','much','such','own',
+    'one','two','three','four','five','six','seven','eight','nine','ten','zero','first','second',
+    'who','whom','whose','which','what','when','where','why','how',
+    'now','today','yes','ok','okay','well','oh','hey','hi','hello','bye',
+    'am','pm','mr','mrs','ms','dr',
+    "i'm","you're","he's","she's","it's","we're","they're","i've","you've","we've","they've",
+    "don't","doesn't","didn't","won't","can't","couldn't","wouldn't","shouldn't","isn't","aren't","wasn't","weren't",
+    "i'll","you'll","he'll","she'll","we'll","they'll","i'd","you'd","let's","that's","there's","what's","here's",
+    'a','an','the','get','got','go','went','come','came','make','made','let'
+  ]);
+
+  // Small offline-first fallback so highlighting works before the full list
+  // is fetched (or if the device is offline on the very first run).
+  const HF_FALLBACK = ('people time year work day man woman child world life hand part eye place week '
+    + 'case point government company number group problem fact money story friend family house home water '
+    + 'room mother father parent boy girl school book student teacher country city week month morning night '
+    + 'job business job market service idea question reason word name area body health power history team game '
+    + 'minute hour moment level office word voice line war history party result change study food car door '
+    + 'face name news age law door member car music sense field paper space term value music police picture '
+    + 'feel become leave bring begin keep hold write stand hear let mean set meet pay sit speak run move live '
+    + 'believe happen carry talk include continue learn change lead understand watch follow stop create speak '
+    + 'read spend grow open walk win teach offer remember consider appear buy serve send build stay fall reach '
+    + 'remain suggest raise pass sell require report decide pull return explain hope develop carry break receive '
+    + 'agree support hit produce eat cover catch draw choose cause point listen realize push wait '
+    + 'good new first last long great little own other old right big high different small large next early young '
+    + 'important few public bad same able human local sure better best free true low late hard strong special clear '
+    + 'recent certain personal open red difficult available likely short single medium past current happy serious '
+    + 'ready simple left physical general environmental financial blue democratic dark various entire close legal '
+    + 'religious cold final main green nice huge popular traditional cultural angry hungry tired afraid quick slow '
+    + 'busy beautiful dangerous famous funny kind quiet rich safe scared sorry strange wrong heavy light deep wide '
+    + 'really actually probably already however usually finally especially simply quickly slowly suddenly together '
+    + 'almost enough nearly perhaps quite rather hardly exactly clearly mostly nearly').split(/\s+/);
+
+  const HF_SOURCE = 'https://cdn.jsdelivr.net/gh/first20hours/google-10000-english@master/google-10000-english-no-swears.txt';
+  const HF_CACHE_KEY = 'jm_hf3000_words';
+  const HF_LIMIT = 3000;
+
+  function buildHfSet(words) {
+    const set = new Set();
+    for (const raw of words) {
+      const w = String(raw || '').toLowerCase().trim();
+      if (!w || w.length < 3) continue;     // skip 1–2 letter tokens
+      if (A1_STOPWORDS.has(w)) continue;    // skip trivial A1 words
+      set.add(w);
+    }
+    return set;
+  }
+
+  async function loadHighFreqWords() {
+    if (state.hfWords) return state.hfWords;
+    // 1) cached list from a previous session
+    try {
+      const cached = localStorage.getItem(HF_CACHE_KEY);
+      if (cached) {
+        const arr = JSON.parse(cached);
+        if (Array.isArray(arr) && arr.length) { state.hfWords = buildHfSet(arr); return state.hfWords; }
+      }
+    } catch {}
+    // 2) fetch the canonical frequency list once, then cache it
+    try {
+      const res = await fetch(HF_SOURCE);
+      if (res.ok) {
+        const text = await res.text();
+        const words = text.split(/\s+/).filter(Boolean).slice(0, HF_LIMIT);
+        if (words.length > 500) {
+          try { localStorage.setItem(HF_CACHE_KEY, JSON.stringify(words)); } catch {}
+          state.hfWords = buildHfSet(words);
+          return state.hfWords;
+        }
+      }
+    } catch (e) { console.warn('High-frequency list fetch failed, using built-in fallback:', e); }
+    // 3) offline fallback
+    state.hfWords = buildHfSet(HF_FALLBACK);
+    return state.hfWords;
+  }
+
+  // True when a token is a high-frequency learning word (and highlighting is on).
+  function isHighFreqWord(token) {
+    if (!state.highlightHF || !state.hfWords) return false;
+    const t = String(token || '').toLowerCase();
+    if (!t || t.length < 3 || A1_STOPWORDS.has(t)) return false;
+    if (state.hfWords.has(t)) return true;
+    const b = baseVerb(t);
+    return b !== t && state.hfWords.has(b);
+  }
+
+  // Count distinct highlighted words across the loaded subtitles (for the badge).
+  function recomputeHfCount() {
+    if (!state.hfWords || !state.highlightHF) { state.hfCount = 0; return; }
+    const seen = new Set();
+    for (const item of state.subtitles) {
+      for (const tok of tokenize(item.en)) {
+        const t = tok.toLowerCase();
+        if (isHighFreqWord(t)) seen.add(state.hfWords.has(t) ? t : baseVerb(t));
+      }
+    }
+    state.hfCount = seen.size;
+  }
+
+  // Load the list, then refresh the UI so highlights + the badge appear.
+  function ensureHfThenRefresh() {
+    loadHighFreqWords().then(() => {
+      recomputeHfCount();
+      renderList(state.listCenter);
+      updateDock(null);
+    }).catch(() => {});
   }
 
   function detectPhrasesInLine(line, clickedWord = '') {
@@ -2279,6 +2416,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     renderList(0);
     updateDock(null);
     saveState();
+    // Load the high-frequency word list (cached after first time), then
+    // re-render so key words get highlighted automatically.
+    ensureHfThenRefresh();
   }
 
   function findIndexAt(time) {
@@ -2440,7 +2580,8 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       if (/^[A-Za-zÀ-ÿ0-9]+(?:[-'][A-Za-zÀ-ÿ0-9]+)*$/.test(part)) {
         wordNo++;
         const active = wordNo === activeWordIndex ? ' active' : '';
-        return `<span class="word${active}" data-word="${escapeHtml(part)}">${escapeHtml(part)}</span>`;
+        const hf = isHighFreqWord(part) ? ' hf' : '';
+        return `<span class="word${active}${hf}" data-word="${escapeHtml(part)}">${escapeHtml(part)}</span>`;
       }
       return escapeHtml(part);
     }).join('');
@@ -2520,7 +2661,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     state.listCenter = Math.max(0, Math.min(center, state.subtitles.length - 1));
     const start = Math.max(0, state.listCenter - state.renderRadius);
     const end = Math.min(state.subtitles.length, state.listCenter + state.renderRadius + 1);
-    el.listInfo.textContent = state.subtitles.length ? `Showing ${start+1}-${end} of ${state.subtitles.length}` : 'Upload SRT to start';
+    el.listInfo.textContent = state.subtitles.length
+      ? `Showing ${start+1}-${end} of ${state.subtitles.length}` + (state.highlightHF && state.hfCount ? ` · ✨ ${state.hfCount} key words` : '')
+      : 'Upload SRT to start';
     const chunks = [];
     if (start > 0) chunks.push(`<button class="small-btn" data-render-center="${Math.max(0,start-state.renderRadius)}">Load previous</button>`);
     for (let i=start; i<end; i++) chunks.push(cardHtml(i, state.subtitles[i]));
@@ -4480,7 +4623,7 @@ Return JSON ONLY, no extra text, in exactly this shape:
     // Stop any in-flight speech capture / TTS when the coach closes.
     if (id === 'speakModal') { stopSpeechCapture(); try { window.speechSynthesis?.cancel(); } catch {} clearTimeout(state.speakClipTimer); }
   }
-  function updateControls() { el.syncValue.textContent = `${state.offset.toFixed(2)}s`; el.speedBtn.textContent = `${state.speed.toFixed(1)}x`; el.autoPauseBtn.textContent = state.autoPause ? 'On' : 'Off'; if (el.repeatDelayValue) el.repeatDelayValue.textContent = `${state.repeatDelaySeconds}s`; }
+  function updateControls() { el.syncValue.textContent = `${state.offset.toFixed(2)}s`; el.speedBtn.textContent = `${state.speed.toFixed(1)}x`; el.autoPauseBtn.textContent = state.autoPause ? 'On' : 'Off'; if (el.repeatDelayValue) el.repeatDelayValue.textContent = `${state.repeatDelaySeconds}s`; const hb = $('highlightHfBtn'); if (hb) hb.textContent = state.highlightHF ? 'On' : 'Off'; }
 
   async function loadUrl(url, opts = {}) {
     url = String(url || '').trim(); if (!url) return;
@@ -4766,6 +4909,14 @@ Return JSON ONLY, no extra text, in exactly this shape:
   if ($('repeatDelayMinus')) $('repeatDelayMinus').onclick = () => { state.repeatDelaySeconds = Math.max(1, Number(state.repeatDelaySeconds || 1) - 1); updateControls(); debounceSave(); toast(`Repeat pause: ${state.repeatDelaySeconds}s`); };
   if ($('repeatDelayPlus')) $('repeatDelayPlus').onclick = () => { state.repeatDelaySeconds = Math.min(5, Number(state.repeatDelaySeconds || 1) + 1); updateControls(); debounceSave(); toast(`Repeat pause: ${state.repeatDelaySeconds}s`); };
   $('autoPauseBtn').onclick = () => { state.autoPause = !state.autoPause; updateControls(); };
+  if ($('highlightHfBtn')) $('highlightHfBtn').onclick = () => {
+    state.highlightHF = !state.highlightHF;
+    localStorage.setItem('jm_highlight_hf', state.highlightHF ? '1' : '0');
+    updateControls();
+    if (state.highlightHF) ensureHfThenRefresh();
+    else { state.hfCount = 0; renderList(state.listCenter); updateDock(null); }
+    toast(state.highlightHF ? 'Key-word highlighting on' : 'Highlighting off');
+  };
   $('goActiveBtn').onclick = () => jumpToCard(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0);
   el.subtitleDock.onclick = () => jumpToCard(currentSubtitleIndex());
   $('jumpCurrentBtn').onclick = () => jumpToCard(currentSubtitleIndex());
@@ -4873,6 +5024,10 @@ Return JSON ONLY, no extra text, in exactly this shape:
     state.subtitles = savedSubs.filter(x => !shouldIgnoreSubtitle(x.en)).map(x => ({...x, time: x.time || formatTime(x.startTime)}));
     renderList(0);
     setStatus(`${state.subtitles.length} subtitles restored`);
+    ensureHfThenRefresh();
+  } else {
+    // Warm the cache so the first uploaded file highlights instantly.
+    loadHighFreqWords().catch(() => {});
   }
   if (savedUrl && !savedUrl.startsWith('blob:')) {
     state.videoUrl = savedUrl;

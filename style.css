@@ -240,3 +240,13 @@
   .speak-score,.score-ring{width:104px;height:104px}
   .score-num{font-size:26px}
 }
+
+/* ──────────────────────────────────────────────────────────────
+   High-frequency key-word highlighting (top 3000 minus easy A1)
+   Works on both the white subtitle cards and the dark player dock.
+   :not(.active):not(:hover) so the amber active word and green hover
+   states still win.
+   ────────────────────────────────────────────────────────────── */
+.word.hf:not(.active):not(:hover){background:rgba(124,58,237,.13);box-shadow:inset 0 -2px 0 rgba(124,58,237,.6);color:inherit}
+.dock-en .word.hf:not(.active):not(:hover){background:rgba(167,139,250,.22);box-shadow:inset 0 -2px 0 rgba(167,139,250,.9)}
+.dict-context .word.hf:not(.active):not(:hover){background:rgba(124,58,237,.13);box-shadow:inset 0 -2px 0 rgba(124,58,237,.6)}
