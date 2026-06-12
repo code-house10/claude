@@ -14,6 +14,12 @@
 /* Smart review cards + bilingual examples */
 .example .ex-en{margin:0 0 6px;font-weight:800;color:#111827;line-height:1.45}
 .example .ex-ar{margin:0;color:#047857;font-weight:800;line-height:1.55}
+.example .ex-head{display:flex;justify-content:flex-end;margin-bottom:2px}
+.ex-speak{border:0;background:#e0f2fe;color:#0369a1;border-radius:10px;padding:5px 9px;font-size:14px;font-weight:900;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.ex-speak:active{transform:scale(.94)}
+.saved-example{position:relative;padding-top:8px}
+.saved-example .ex-speak{position:absolute;top:6px;inset-inline-end:6px;padding:4px 8px;font-size:13px}
+.saved-example p[dir=ltr]{padding-inline-end:38px}
 .saved-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:9px}.due-chip{font-size:11px;background:#eef2ff;color:#3730a3;border-radius:999px;padding:6px 9px;font-weight:800}.review-card{background:#f8fafc;border:1px solid #e5e7eb;border-radius:20px;padding:14px;box-shadow:0 8px 22px rgba(15,23,42,.08)}.review-count{display:inline-flex;background:#e0f2fe;color:#0369a1;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:900;margin-bottom:10px}.review-front{font-size:19px;font-weight:900;line-height:1.55;background:#fff;border:1px solid #eef2f7;border-radius:16px;padding:14px;text-align:left}.review-back{font-size:17px;font-weight:900;line-height:1.6;background:#ecfdf5;color:#047857;border:1px solid #bbf7d0;border-radius:16px;padding:14px;margin-top:10px}.review-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.review-actions .again{background:#fee2e2;color:#991b1b}.review-actions .hard{background:#fef3c7;color:#92400e}.review-actions .good{background:#dcfce7;color:#166534}.review-actions .easy{background:#ede9fe;color:#5b21b6}.review-empty{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:18px;padding:18px;text-align:center}.menu-grid{grid-template-columns:1fr 1fr}.menu-grid button:nth-child(6){background:#ede9fe;color:#5b21b6}.menu-grid button:nth-child(7){background:#ecfdf5;color:#047857}
 
 /* Multi-subtitle repeat + smart word cards refinements */

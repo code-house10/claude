@@ -3187,44 +3187,132 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     }
   }
 
-  async function openDict(word, idx = state.lastIndex) {
-    word = String(word || '').replace(/[^A-Za-zÀ-ÿ0-9'-]/g, '').trim();
-    if (!word) return;
+  // Generate 5 natural example sentences for a word or phrasal verb, each with
+  // an Egyptian-colloquial Arabic translation, in a single Puter AI call.
+  function buildPuterWordExamplesPrompt(term, contextEn = '') {
+    const isPhrase = String(term).includes(' ');
+    return `You are an English teacher for an Egyptian Arabic-speaking learner.
+Give EXACTLY 5 short, natural, everyday example sentences using the English ${isPhrase ? 'phrase / phrasal verb' : 'word'} "${term}".
+${contextEn ? `The learner met it in this line: "${contextEn}". Keep at least one example close to that meaning.` : ''}
+Rules:
+- Each English sentence must actually contain "${term}" (or its natural inflected form).
+- Keep sentences short and useful for daily speaking.
+- For each one, add a NATURAL EGYPTIAN COLLOQUIAL ARABIC translation (المصرية الدارجة) — friendly, not formal MSA, no transliteration.
+Return JSON ONLY:
+{"examples":[{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."}]}`;
+  }
+
+  async function fetchWordExamplesFromPuter(term, contextEn = '') {
+    if (!window.puter?.ai?.chat) throw new Error('Puter AI is not loaded.');
+    const prompt = buildPuterWordExamplesPrompt(term, contextEn);
+    let lastError = null;
+    for (const model of PUTER_SUBTITLE_MODELS) {
+      try {
+        const resp = await window.puter.ai.chat(prompt, { model, temperature: 0.4, max_tokens: 800 });
+        const parsed = parseJsonLoose(puterResponseToText(resp));
+        const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.examples) ? parsed.examples : []);
+        const rows = list
+          .map(x => ({ en: cleanLine(x?.en || x?.english || ''), ar: cleanPuterArabicTranslation(x?.ar || x?.arabic || '') }))
+          .filter(x => x.en)
+          .slice(0, 5);
+        if (rows.length) return rows;
+      } catch (e) { lastError = e; console.warn('Puter word examples failed with model', model, e); }
+    }
+    throw lastError || new Error('No examples');
+  }
+
+  // Translate a word/phrase to short natural Egyptian Arabic. Puter first,
+  // MyMemory fallback so it always returns something usable.
+  async function translateTermPreferred(term, contextEn = '') {
+    term = cleanLine(term);
+    if (!term) return '';
+    if (window.puter?.ai?.chat) {
+      const isPhrase = term.includes(' ');
+      const prompt = `Translate the English ${isPhrase ? 'phrase' : 'word'} "${term}" into SHORT natural Egyptian colloquial Arabic (المصرية الدارجة)${contextEn ? ` as used in: "${contextEn}"` : ''}. Return ONLY the Arabic, no notes, no quotes.`;
+      for (const model of PUTER_SUBTITLE_MODELS) {
+        try {
+          const r = await window.puter.ai.chat(prompt, { model, temperature: 0.2, max_tokens: 80 });
+          const ar = cleanPuterArabicTranslation(puterResponseToText(r));
+          if (ar) return ar;
+        } catch (e) { console.warn('Puter term translation failed:', e); }
+      }
+    }
+    try { return await translateMyMemory(term); } catch { return ''; }
+  }
+
+  // Build dict-example HTML rows, each with its own 🔊 speak button.
+  function renderDictExampleRows(examples) {
+    return examples.map(ex => `<div class="example"><div class="ex-head"><button class="ex-speak" data-speak-ex="${escapeHtml(ex.en)}" title="Speak">🔊</button></div><p class="ex-en" dir="ltr">${escapeHtml(ex.en)}</p><p class="ex-ar" dir="rtl">${escapeHtml(ex.ar || 'تعذر ترجمة المثال')}</p></div>`).join('');
+  }
+
+  // Accepts a single word OR a compound phrase (e.g. "wake up").
+  async function openDict(rawTerm, idx = state.lastIndex) {
+    // Keep internal spaces so phrasal verbs survive; strip other punctuation.
+    const term = String(rawTerm || '').replace(/[^A-Za-zÀ-ÿ0-9' -]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!term) return;
+    const isPhrase = term.includes(' ');
     const item = state.subtitles[idx];
     const contextEn = item ? cleanLine(item.en) : '';
-    state.currentDictWord = word;
+    state.currentDictWord = term;
     state.currentDictExamples = [];
-    $('dictWord').textContent = word;
-    $('dictTranslation').textContent = 'Searching...';
+    $('dictWord').textContent = term;
+    $('dictTranslation').textContent = 'Searching…';
     $('dictContext').innerHTML = idx >= 0 && item ? wordHtml(item.en, -1) : '';
+
+    // Phrase chips: when a SINGLE word was clicked, surface the compound
+    // phrases in the line so the user can open the full phrasal-verb card.
     if ($('dictPhrases')) {
-      const phrases = item ? detectPhrasesInLine(item.en, word) : [];
-      $('dictPhrases').innerHTML = phrases.length ? `<div class="phrase-suggestions"><b>🧩 Phrases in this line</b><p>Save the full chunk with its movie-context meaning.</p>${phrases.map(p => `<button class="phrase-save-btn" data-save-phrase="${escapeHtml(p.phrase)}" data-index="${idx}">★ ${escapeHtml(p.phrase)}</button>`).join('')}</div>` : '';
+      const phrases = (item && !isPhrase) ? detectPhrasesInLine(item.en, term) : [];
+      $('dictPhrases').innerHTML = phrases.length
+        ? `<div class="phrase-suggestions"><b>🧩 Compound / phrasal verbs here</b><p>Tap to open the full card: meaning, 5 Egyptian examples &amp; pronunciation.</p>${phrases.map(p => `<button class="phrase-save-btn" data-open-term="${escapeHtml(p.phrase)}" data-index="${idx}">▸ ${escapeHtml(p.phrase)}</button>`).join('')}</div>`
+        : '';
     }
     $('dictExamples').innerHTML = '';
     openModal('dictModal');
-    speak(word);
-    $('dictPlayPhraseBtn').onclick = () => openPlayPhrase(word);
-    $('dictSaveBtn').onclick = () => saveWord(word, $('dictTranslation').textContent || '', { kind: 'word', contextEn, contextAr: item?.ar || '', sourceLineKey: item ? lineKey(item) : '', startTime: item?.startTime || 0, examples: state.currentDictExamples || [] });
-    $('dictSpeakBtn').onclick = () => speak(word);
-    try { $('dictTranslation').textContent = await translateMyMemory(word); } catch { $('dictTranslation').textContent = 'Translation failed'; }
+    speak(term);
+    $('dictPlayPhraseBtn').onclick = () => openPlayPhrase(term);
+    $('dictSpeakBtn').onclick = () => speak(term);
+    $('dictSaveBtn').onclick = () => saveWord(term, $('dictTranslation').textContent || '', {
+      kind: isPhrase ? 'phrase' : 'word',
+      contextEn, contextAr: item?.ar || '',
+      sourceLineKey: item ? lineKey(item) : '',
+      startTime: item?.startTime || 0,
+      examples: state.currentDictExamples || []
+    });
+
+    // Translation — Egyptian Puter first, MyMemory fallback.
+    try { $('dictTranslation').textContent = await translateTermPreferred(term, contextEn); }
+    catch { $('dictTranslation').textContent = 'Translation failed'; }
+
+    // Examples — 5 from Puter AI (Egyptian), fallback to dictionary API + MyMemory.
+    $('dictExamples').innerHTML = '<div class="example">✨ Puter AI is writing 5 Egyptian examples…</div>';
     try {
-      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
-      const data = await res.json(); const examples = [];
-      for (const m of data?.[0]?.meanings || []) for (const d of m.definitions || []) if (d.example) examples.push(d.example);
-      const topExamples = [...new Set(examples)].slice(0,3);
-      if (!topExamples.length) throw new Error('No examples');
-      $('dictExamples').innerHTML = '<div class="example">Translating examples...</div>';
-      const rows = [];
-      state.currentDictExamples = [];
-      for (const ex of topExamples) {
-        let ar = '';
-        try { ar = await translateMyMemory(ex); } catch {}
-        state.currentDictExamples.push({ en: ex, ar: ar || '' });
-        rows.push(`<div class="example"><p class="ex-en" dir="ltr">${escapeHtml(ex)}</p><p class="ex-ar" dir="rtl">${escapeHtml(ar || 'تعذر ترجمة المثال')}</p></div>`);
-      }
-      $('dictExamples').innerHTML = rows.join('');
-    } catch { $('dictExamples').innerHTML = '<div class="example">No examples found.</div>'; }
+      const rows = await fetchWordExamplesFromPuter(term, contextEn);
+      if (!rows.length) throw new Error('empty');
+      // Guard: the modal may have been reused for another term while we awaited.
+      if (state.currentDictWord !== term) return;
+      state.currentDictExamples = rows;
+      $('dictExamples').innerHTML = renderDictExampleRows(rows);
+    } catch (puterErr) {
+      console.warn('Puter examples unavailable, falling back to dictionary API:', puterErr);
+      try {
+        const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`);
+        const data = await res.json(); const examples = [];
+        for (const m of data?.[0]?.meanings || []) for (const d of m.definitions || []) if (d.example) examples.push(d.example);
+        const topExamples = [...new Set(examples)].slice(0, 5);
+        if (!topExamples.length) throw new Error('No examples');
+        $('dictExamples').innerHTML = '<div class="example">Translating examples…</div>';
+        const rows = [];
+        for (const ex of topExamples) {
+          let ar = '';
+          try { ar = await translateMyMemory(ex); } catch {}
+          rows.push({ en: ex, ar: ar || '' });
+        }
+        if (state.currentDictWord !== term) return;
+        state.currentDictExamples = rows;
+        $('dictExamples').innerHTML = renderDictExampleRows(rows);
+      } catch { $('dictExamples').innerHTML = '<div class="example">No examples found.</div>'; }
+    }
   }
 
   function showSaved(type) {
@@ -3243,8 +3331,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     body.innerHTML = header + arr.map((x, i) => {
       if (isWords || isPhrases || isTemplates) {
         const originalIndex = state.savedWords.indexOf(x);
-        const displayExamples = x.kind === 'template' ? sanitizeTemplateExamples(x.examples || [], x.word, x.contextEn || '') : (Array.isArray(x.examples) ? x.examples.slice(0,3) : []);
-        const examples = displayExamples.length ? `<div class="saved-section"><b>Examples <small class="example-source">Subtitle / OpenRouter / Puter / MyMemory</small></b>${displayExamples.slice(0,3).map(ex => `<div class="saved-example"><p dir="ltr">${escapeHtml(ex.en || ex)}</p>${ex.ar ? `<p dir="rtl">${escapeHtml(ex.ar)}</p>` : ''}</div>`).join('')}</div>` : '';
+        const exLimit = x.kind === 'template' ? 3 : 5;
+        const displayExamples = x.kind === 'template' ? sanitizeTemplateExamples(x.examples || [], x.word, x.contextEn || '') : (Array.isArray(x.examples) ? x.examples.slice(0, exLimit) : []);
+        const examples = displayExamples.length ? `<div class="saved-section"><b>Examples <small class="example-source">Puter AI · Egyptian</small></b>${displayExamples.slice(0, exLimit).map(ex => `<div class="saved-example">${(ex.en || ex) ? `<button class="ex-speak" data-speak-ex="${escapeHtml(ex.en || ex)}" title="Speak">🔊</button>` : ''}<p dir="ltr">${escapeHtml(ex.en || ex)}</p>${ex.ar ? `<p dir="rtl">${escapeHtml(ex.ar)}</p>` : ''}</div>`).join('')}</div>` : '';
         const usage = x.kind === 'template' ? `<div class="saved-section template-usage"><b>When to use it</b>${x.templateUsageEn ? `<p dir="ltr">${escapeHtml(x.templateUsageEn)}</p>` : ''}${x.templateUsageAr ? `<p dir="rtl" class="ar">${escapeHtml(x.templateUsageAr)}</p>` : ''}${x.templateSlot ? `<small>Original slot: ${escapeHtml(x.templateSlot)}</small>` : ''}</div>` : '';
         const label = x.kind === 'template' ? 'Template' : (x.kind === 'phrase' ? 'Phrase' : 'Word');
         return `<details class="saved-details ${x.kind === 'phrase' ? 'phrase-item' : ''} ${x.kind === 'template' ? 'template-item' : ''}">
@@ -4516,6 +4605,8 @@ Return JSON ONLY, no extra text, in exactly this shape:
       if (action === 'playphrase') return openPlayPhrase(cleanLine(state.subtitles[i]?.en));
       return;
     }
+    const openTermBtn = e.target.closest('[data-open-term]'); if (openTermBtn) { openDict(openTermBtn.dataset.openTerm, Number(openTermBtn.dataset.index)); return; }
+    const speakExBtn = e.target.closest('[data-speak-ex]'); if (speakExBtn) { speak(speakExBtn.dataset.speakEx); return; }
     const savePhrase = e.target.closest('[data-save-phrase]'); if (savePhrase) { savePhraseFromSubtitle(savePhrase.dataset.savePhrase, Number(savePhrase.dataset.index)); return; }
     const refreshOneTemplate = e.target.closest('[data-refresh-template-examples]'); if (refreshOneTemplate) { refreshTemplateExamplesByIndex(refreshOneTemplate.dataset.refreshTemplateExamples); return; }
     const refreshAllTemplates = e.target.closest('[data-refresh-all-template-examples]'); if (refreshAllTemplates) { refreshAllTemplateExamples(); return; }

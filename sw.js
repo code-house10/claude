@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-speaking-coach-v5';
-const ASSETS = ['./', './index.html', './style.css?v=speaking-coach-v5', './app.js?v=speaking-coach-v5'];
+const CACHE_NAME = 'jungle-movie-phrasal-dict-v6';
+const ASSETS = ['./', './index.html', './style.css?v=phrasal-dict-v6', './app.js?v=phrasal-dict-v6'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
