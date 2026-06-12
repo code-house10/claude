@@ -3961,9 +3961,436 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     toast('Lesson restored');
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // SPEAKING COACH — shadow & reply practice with pronunciation analysis
+  //
+  // Flow: listen (TTS or scene clip) → record your reply (Web Speech API)
+  //       → analysis (word-diff, speaking pace, Puter AI feedback).
+  //
+  // Two modes:
+  //   echo  — repeat the exact scene line. We word-diff your transcript
+  //           against the target and highlight the words you stumbled on,
+  //           and compare your pace to the scene's original pace.
+  //   reply — answer in your own words. There's no fixed target, so Puter AI
+  //           judges whether your reply fits and conveys a natural meaning.
+  //
+  // Honest limit: the browser Speech API returns a transcript + an overall
+  // confidence, NOT phoneme-level scoring. "Pronunciation" feedback is
+  // inferred from which words were misheard + the confidence + Puter AI's
+  // read of the transcript. It's a practical guide, not a phonetics lab.
+  // ════════════════════════════════════════════════════════════════
+
+  function speechRecognitionSupported() {
+    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  }
+
+  // Start one capture turn. Resolves with { transcript, confidence, durationMs, words }.
+  // onInterim(text) is called with the live partial transcript while speaking.
+  function startSpeechCapture({ lang = 'en-US', onInterim } = {}) {
+    return new Promise((resolve, reject) => {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { reject(new Error('unsupported')); return; }
+      const rec = new SR();
+      rec.lang = lang;
+      rec.interimResults = true;
+      rec.continuous = false;
+      rec.maxAlternatives = 1;
+
+      let finalText = '';
+      let bestConfidence = 0;
+      let startedAt = 0;
+      let endedAt = 0;
+      let settled = false;
+      state.speakRecognition = rec;
+
+      rec.onaudiostart = () => { startedAt = performance.now(); };
+      rec.onspeechend = () => { endedAt = performance.now(); };
+      rec.onresult = (e) => {
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const res = e.results[i];
+          if (res.isFinal) {
+            finalText += res[0].transcript + ' ';
+            if (typeof res[0].confidence === 'number' && res[0].confidence > 0) {
+              bestConfidence = Math.max(bestConfidence, res[0].confidence);
+            }
+          } else {
+            interim += res[0].transcript;
+          }
+        }
+        if (onInterim) onInterim((finalText + ' ' + interim).trim());
+      };
+      rec.onerror = (e) => {
+        if (settled) return;
+        settled = true;
+        state.speakRecognition = null;
+        reject(new Error(e.error || 'speech-error'));
+      };
+      rec.onend = () => {
+        if (settled) return;
+        settled = true;
+        state.speakRecognition = null;
+        if (!startedAt) startedAt = performance.now();
+        if (!endedAt) endedAt = performance.now();
+        const transcript = cleanLine(finalText);
+        const words = tokenize(transcript);
+        resolve({
+          transcript,
+          confidence: bestConfidence,
+          durationMs: Math.max(0, endedAt - startedAt),
+          words
+        });
+      };
+
+      try { rec.start(); } catch (err) { settled = true; state.speakRecognition = null; reject(err); }
+    });
+  }
+
+  function stopSpeechCapture() {
+    try { state.speakRecognition?.stop(); } catch {}
+  }
+
+  // LCS-based alignment: marks each TARGET word as 'match' or 'miss' relative
+  // to what the learner actually said.
+  function alignWords(targetWords, saidWords) {
+    const a = targetWords.map(w => normalizeAnswer(w));
+    const b = saidWords.map(w => normalizeAnswer(w));
+    const n = a.length, m = b.length;
+    const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const marks = targetWords.map(w => ({ word: w, status: 'miss' }));
+    let i = 0, j = 0, matched = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { marks[i].status = 'match'; matched++; i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+      else j++;
+    }
+    return { marks, matched, total: n };
+  }
+
+  function computeWpm(wordCount, durationMs) {
+    const mins = durationMs / 60000;
+    if (mins <= 0) return 0;
+    return Math.round(wordCount / mins);
+  }
+
+  function scenePaceWpm(item) {
+    if (!item) return 0;
+    const dur = (Number(item.endTime) || 0) - (Number(item.startTime) || 0);
+    const words = tokenize(item.en).length;
+    if (dur <= 0 || !words) return 0;
+    return Math.round(words / (dur / 60));
+  }
+
+  function playClipOnce(item) {
+    if (!item || !state.videoUrl || state.playerType === 'none') { toast('No video clip — using voice'); speakText(cleanLine(item?.en || '')); return; }
+    const dur = Math.max(0.4, (Number(item.endTime) || 0) - (Number(item.startTime) || 0));
+    seekMedia(item.startTime, true);
+    clearTimeout(state.speakClipTimer);
+    state.speakClipTimer = setTimeout(() => pauseMedia(), (dur * 1000) / (state.speed || 1) + 180);
+  }
+
+  function buildSpeakingPrompt(ctx) {
+    const { mode, characterLine, target, transcript, wpm, scenePace, confidence, accuracy, missedWords } = ctx;
+    const common = `You are a friendly English speaking coach for an Egyptian Arabic-speaking learner.
+The learner is practicing speaking by responding to a movie scene line.
+
+SCENE LINE (what the character said):
+"${characterLine}"
+
+WHAT THE LEARNER SAID (auto-transcribed from their voice, may contain small recognition errors):
+"${transcript || '(nothing was captured)'}"
+
+MEASUREMENTS:
+- Speaking pace: ${wpm} words/min${scenePace ? ` (scene pace was about ${scenePace} words/min)` : ''}
+- Recognition confidence: ${Math.round((confidence || 0) * 100)}%
+${mode === 'echo' ? `- Target line to repeat: "${target}"\n- Word accuracy vs target: ${Math.round((accuracy || 0) * 100)}%\n- Words likely stumbled: ${missedWords && missedWords.length ? missedWords.join(', ') : 'none'}` : ''}`;
+
+    const task = mode === 'echo'
+      ? `TASK: The learner was trying to REPEAT the target line exactly (shadowing).
+Judge how close they got, point out the specific words they likely mispronounced or dropped, and give one concrete pronunciation tip.`
+      : `TASK: The learner was REPLYING to the scene in their own words.
+Judge whether their reply is a natural, sensible response that conveys an appropriate meaning. It does NOT need to match the original line.`;
+
+    return `${common}
+
+${task}
+
+Return JSON ONLY, no extra text, in exactly this shape:
+{
+  "score": <integer 0-100 overall>,
+  "meaning": "<one short English sentence: ${mode === 'echo' ? 'how accurate the repetition was' : 'whether the reply fits and what it conveys'}>",
+  "pronunciation": "<one short English sentence about likely pronunciation issues, naming specific words if any>",
+  "fluency": "<one short English sentence about pace and naturalness>",
+  "better": "<one improved, natural English sentence the learner could say next time>",
+  "ar": "<جملة تشجيع ونصيحة قصيرة بالعربية المصرية الدارجة>"
+}`;
+  }
+
+  async function analyzeSpeakingAttempt(ctx) {
+    if (!window.puter?.ai?.chat) throw new Error('Puter AI is not loaded.');
+    const prompt = buildSpeakingPrompt(ctx);
+    let lastError = null;
+    for (const model of PUTER_SUBTITLE_MODELS) {
+      try {
+        const response = await window.puter.ai.chat(prompt, { model, temperature: 0.3, max_tokens: 500 });
+        const parsed = parseJsonLoose(puterResponseToText(response));
+        if (parsed && typeof parsed === 'object') {
+          return {
+            score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
+            meaning: cleanLine(parsed.meaning || ''),
+            pronunciation: cleanLine(parsed.pronunciation || ''),
+            fluency: cleanLine(parsed.fluency || ''),
+            better: cleanLine(parsed.better || ''),
+            ar: cleanLine(parsed.ar || '')
+          };
+        }
+      } catch (e) { lastError = e; console.warn('Puter speaking analysis failed with model', model, e); }
+    }
+    throw lastError || new Error('Speaking analysis failed.');
+  }
+
+  function openSpeakingCoach(index) {
+    const idx = Number(index);
+    const item = state.subtitles[idx];
+    if (!item) { toast('Pick a subtitle line first'); return; }
+    openMenu(false);
+    state.speak = {
+      index: idx,
+      mode: 'echo',
+      step: 'intro',     // intro | recording | analyzing | result
+      transcript: '',
+      interim: '',
+      result: null,      // { transcript, confidence, durationMs, words, wpm, accuracy, marks, missedWords }
+      analysis: null,
+      error: ''
+    };
+    renderSpeakCoach();
+    openModal('speakModal');
+  }
+
+  function renderSpeakCoach() {
+    const body = $('speakBody');
+    const s = state.speak;
+    if (!s) return;
+    const item = state.subtitles[s.index];
+    if (!item) { body.innerHTML = '<p>Line not found.</p>'; return; }
+    const en = cleanLine(item.en);
+    const ar = item.ar || '';
+    const supported = speechRecognitionSupported();
+
+    const modeToggle = `<div class="speak-modes">
+      <button class="speak-mode ${s.mode === 'echo' ? 'on' : ''}" data-speak-mode="echo">🪞 Echo<small>repeat the line</small></button>
+      <button class="speak-mode ${s.mode === 'reply' ? 'on' : ''}" data-speak-mode="reply">💬 Reply<small>your own words</small></button>
+    </div>`;
+
+    const sceneCard = `<div class="speak-scene">
+      <div class="speak-scene-label">${s.mode === 'echo' ? 'Repeat this line' : 'Respond to this line'}</div>
+      <div class="speak-line-en" dir="ltr">${escapeHtml(en)}</div>
+      ${ar ? `<div class="speak-line-ar" dir="rtl">${escapeHtml(ar)}</div>` : ''}
+      <div class="speak-listen-row">
+        <button class="small-btn speak-listen" data-speak-listen="tts">🔊 Hear voice</button>
+        <button class="small-btn speak-listen" data-speak-listen="clip">▶ Play scene clip</button>
+      </div>
+    </div>`;
+
+    let stepHtml = '';
+    if (s.step === 'intro') {
+      if (supported) {
+        stepHtml = `<div class="speak-record-area">
+          <button class="mic-big" data-speak-record><span class="mic-ic">🎙️</span><span>Tap &amp; speak ${s.mode === 'echo' ? 'the line' : 'your reply'}</span></button>
+          <p class="hint-small">Allow microphone access when asked. Speak clearly, then pause — it stops automatically.</p>
+        </div>`;
+      } else {
+        stepHtml = `<div class="speak-record-area">
+          <p class="hint-small">⚠️ Your browser doesn't support voice capture. Use Chrome/Edge for full pronunciation analysis, or type what you'd say below for meaning feedback.</p>
+          <textarea class="answer-input speak-typed" rows="2" dir="ltr" placeholder="Type what you would say…" data-speak-typed></textarea>
+          <button class="full-btn" data-speak-analyze-typed>Analyze meaning</button>
+        </div>`;
+      }
+    } else if (s.step === 'recording') {
+      stepHtml = `<div class="speak-record-area recording">
+        <button class="mic-big rec" data-speak-stop><span class="mic-ic pulse">🔴</span><span>Listening… tap to stop</span></button>
+        <div class="speak-interim" dir="ltr">${escapeHtml(s.interim || '…')}</div>
+      </div>`;
+    } else if (s.step === 'analyzing') {
+      stepHtml = `<div class="speak-record-area"><div class="speak-spinner">🧠 Puter AI is analyzing your speaking…</div></div>`;
+    } else if (s.step === 'result') {
+      stepHtml = renderSpeakResult(item);
+    }
+
+    body.innerHTML = `${modeToggle}${sceneCard}${s.error ? `<div class="speak-error">${escapeHtml(s.error)}</div>` : ''}${stepHtml}`;
+    bindSpeakControls();
+  }
+
+  function renderSpeakResult(item) {
+    const s = state.speak;
+    const r = s.result || {};
+    const a = s.analysis;
+    const scene = scenePaceWpm(item);
+
+    // Transcript with per-word diff for echo mode.
+    let transcriptHtml;
+    if (s.mode === 'echo' && r.marks) {
+      const diff = r.marks.map(m => `<span class="dw ${m.status}">${escapeHtml(m.word)}</span>`).join(' ');
+      transcriptHtml = `<div class="speak-diff" dir="ltr">${diff}</div>
+        <div class="speak-said" dir="ltr"><b>You said:</b> ${escapeHtml(r.transcript || '—')}</div>`;
+    } else {
+      transcriptHtml = `<div class="speak-said" dir="ltr"><b>You said:</b> ${escapeHtml(r.transcript || '—')}</div>`;
+    }
+
+    // Pace comparison.
+    const paceClass = (() => {
+      if (!scene || !r.wpm) return '';
+      const ratio = r.wpm / scene;
+      if (ratio < 0.7) return 'slow';
+      if (ratio > 1.4) return 'fast';
+      return 'good';
+    })();
+    const paceLabel = paceClass === 'slow' ? 'A bit slow' : paceClass === 'fast' ? 'A bit fast' : paceClass === 'good' ? 'Natural pace' : '';
+
+    const metrics = `<div class="speak-metrics">
+      ${s.mode === 'echo' && typeof r.accuracy === 'number' ? `<div class="sm-chip"><b>${Math.round(r.accuracy * 100)}%</b><span>word accuracy</span></div>` : ''}
+      <div class="sm-chip"><b>${r.wpm || 0}</b><span>your pace (wpm)</span></div>
+      ${scene ? `<div class="sm-chip ${paceClass}"><b>${scene}</b><span>scene pace${paceLabel ? ' · ' + paceLabel : ''}</span></div>` : ''}
+      ${typeof r.confidence === 'number' ? `<div class="sm-chip"><b>${Math.round(r.confidence * 100)}%</b><span>clarity</span></div>` : ''}
+    </div>`;
+
+    const score = a ? `<div class="speak-score">
+        <svg viewBox="0 0 36 36" class="score-ring"><path class="ring-bg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 0 1 0-31"/><path class="ring-fg" stroke-dasharray="${(a.score / 100) * 97.4}, 97.4" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 0 1 0-31"/></svg>
+        <div class="score-num">${a.score}<small>/100</small></div>
+      </div>` : '';
+
+    const cards = a ? `<div class="speak-analysis">
+      ${a.meaning ? `<div class="an-card meaning"><b>🎯 Meaning</b><p dir="ltr">${escapeHtml(a.meaning)}</p></div>` : ''}
+      ${a.pronunciation ? `<div class="an-card pron"><b>🗣️ Pronunciation</b><p dir="ltr">${escapeHtml(a.pronunciation)}</p></div>` : ''}
+      ${a.fluency ? `<div class="an-card flu"><b>🌊 Fluency</b><p dir="ltr">${escapeHtml(a.fluency)}</p></div>` : ''}
+      ${a.better ? `<div class="an-card better"><b>✨ Try saying</b><p dir="ltr">${escapeHtml(a.better)}</p><button class="small-btn speak-listen" data-speak-say="${escapeHtml(a.better)}">🔊</button></div>` : ''}
+      ${a.ar ? `<div class="an-card ar"><b>💪 نصيحة</b><p dir="rtl">${escapeHtml(a.ar)}</p></div>` : ''}
+    </div>` : (s.analysisError ? `<div class="speak-error">${escapeHtml(s.analysisError)}</div>` : '');
+
+    return `<div class="speak-result">
+      ${score}
+      ${metrics}
+      ${transcriptHtml}
+      ${cards}
+      <div class="speak-result-actions">
+        <button class="small-btn" data-speak-retry>🔁 Try again</button>
+        <button class="small-btn primary-pill" data-speak-next>➡ Next line</button>
+      </div>
+    </div>`;
+  }
+
+  function bindSpeakControls() {
+    const body = $('speakBody');
+    if (!body) return;
+    const s = state.speak;
+
+    body.querySelectorAll('[data-speak-mode]').forEach(b => b.onclick = () => {
+      s.mode = b.dataset.speakMode; s.step = 'intro'; s.result = null; s.analysis = null; s.error = ''; renderSpeakCoach();
+    });
+    body.querySelectorAll('[data-speak-listen]').forEach(b => b.onclick = () => {
+      const item = state.subtitles[s.index];
+      if (b.dataset.speakListen === 'clip') playClipOnce(item);
+      else speakText(cleanLine(item.en));
+    });
+    body.querySelectorAll('[data-speak-say]').forEach(b => b.onclick = () => speakText(b.dataset.speakSay));
+
+    const recBtn = body.querySelector('[data-speak-record]');
+    if (recBtn) recBtn.onclick = () => startSpeakRecording();
+    const stopBtn = body.querySelector('[data-speak-stop]');
+    if (stopBtn) stopBtn.onclick = () => stopSpeechCapture();
+
+    const analyzeTyped = body.querySelector('[data-speak-analyze-typed]');
+    if (analyzeTyped) analyzeTyped.onclick = () => {
+      const typed = body.querySelector('[data-speak-typed]')?.value || '';
+      if (!cleanLine(typed)) { toast('Type something first'); return; }
+      runSpeakAnalysis({ transcript: cleanLine(typed), confidence: 0, durationMs: 0, words: tokenize(typed) });
+    };
+
+    const retry = body.querySelector('[data-speak-retry]');
+    if (retry) retry.onclick = () => { s.step = 'intro'; s.result = null; s.analysis = null; s.error = ''; renderSpeakCoach(); };
+    const next = body.querySelector('[data-speak-next]');
+    if (next) next.onclick = () => {
+      const ni = Math.min(state.subtitles.length - 1, s.index + 1);
+      openSpeakingCoach(ni);
+    };
+  }
+
+  async function startSpeakRecording() {
+    const s = state.speak;
+    s.step = 'recording'; s.interim = ''; s.error = '';
+    renderSpeakCoach();
+    try {
+      const capture = await startSpeechCapture({
+        onInterim: (text) => { s.interim = text; const live = $('speakBody')?.querySelector('.speak-interim'); if (live) live.textContent = text || '…'; }
+      });
+      if (!capture.transcript) {
+        s.step = 'intro'; s.error = "Didn't catch that — try again, a bit louder."; renderSpeakCoach(); return;
+      }
+      runSpeakAnalysis(capture);
+    } catch (e) {
+      s.step = 'intro';
+      s.error = e.message === 'not-allowed'
+        ? 'Microphone blocked. Allow mic access in your browser settings and retry.'
+        : e.message === 'no-speech'
+          ? "Didn't hear anything — try again."
+          : 'Voice capture failed: ' + (e.message || e);
+      renderSpeakCoach();
+    }
+  }
+
+  async function runSpeakAnalysis(capture) {
+    const s = state.speak;
+    const item = state.subtitles[s.index];
+    const target = cleanLine(item.en);
+    const targetWords = tokenize(target);
+    const wpm = computeWpm(capture.words.length, capture.durationMs);
+
+    let accuracy, marks, missedWords;
+    if (s.mode === 'echo') {
+      const al = alignWords(targetWords, capture.words);
+      marks = al.marks;
+      accuracy = al.total ? al.matched / al.total : 0;
+      missedWords = al.marks.filter(m => m.status === 'miss').map(m => m.word);
+    }
+
+    s.result = { ...capture, wpm, accuracy, marks, missedWords };
+    s.step = 'analyzing';
+    s.analysis = null;
+    s.analysisError = '';
+    renderSpeakCoach();
+
+    try {
+      s.analysis = await analyzeSpeakingAttempt({
+        mode: s.mode,
+        characterLine: target,
+        target,
+        transcript: capture.transcript,
+        wpm,
+        scenePace: scenePaceWpm(item),
+        confidence: capture.confidence,
+        accuracy,
+        missedWords
+      });
+    } catch (e) {
+      s.analysisError = 'AI analysis unavailable: ' + (e.message || e) + '. Your pace & word accuracy above are still valid.';
+    }
+    s.step = 'result';
+    renderSpeakCoach();
+  }
+
   function openMenu(show=true) { el.menuSheet.classList.toggle('hidden', !show); }
   function openModal(id) { $(id).classList.remove('hidden'); }
-  function closeModal(id) { $(id).classList.add('hidden'); }
+  function closeModal(id) {
+    $(id).classList.add('hidden');
+    // Stop any in-flight speech capture / TTS when the coach closes.
+    if (id === 'speakModal') { stopSpeechCapture(); try { window.speechSynthesis?.cancel(); } catch {} clearTimeout(state.speakClipTimer); }
+  }
   function updateControls() { el.syncValue.textContent = `${state.offset.toFixed(2)}s`; el.speedBtn.textContent = `${state.speed.toFixed(1)}x`; el.autoPauseBtn.textContent = state.autoPause ? 'On' : 'Off'; if (el.repeatDelayValue) el.repeatDelayValue.textContent = `${state.repeatDelaySeconds}s`; }
 
   async function loadUrl(url, opts = {}) {
@@ -4232,6 +4659,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   if ($('menuExtractTemplates')) $('menuExtractTemplates').onclick = saveTemplatesFromAllSubtitles;
   $('menuSavedLines').onclick = () => { openMenu(false); showSaved('lines'); };
   $('menuReviewCards').onclick = showReviewCards;
+  if ($('menuSpeakingCoach')) $('menuSpeakingCoach').onclick = () => { openMenu(false); openSpeakingCoach(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0); };
   $('menuSaveCloud').onclick = saveLessonToCloud;
   if ($('menuSyncSavedCloud')) $('menuSyncSavedCloud').onclick = () => { openMenu(false); syncSavedItemsToCloud({ silent: false, reason: 'manual' }); };
   if ($('menuLoadSavedCloud')) $('menuLoadSavedCloud').onclick = () => { openMenu(false); loadSavedItemsFromCloud({ silent: false, merge: true }).then(() => showSaved('lines')); };
@@ -4257,6 +4685,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   $('saveLineBtn').onclick = () => saveLine(currentSubtitleIndex());
   $('copyLineBtn').onclick = () => copyLine(currentSubtitleIndex());
   $('translateLineBtn').onclick = () => translateLine(currentSubtitleIndex());
+  if ($('speakLineBtn')) $('speakLineBtn').onclick = () => openSpeakingCoach(currentSubtitleIndex());
   $('playPhraseLineBtn').onclick = () => { const item = state.subtitles[currentSubtitleIndex()]; if (item) openPlayPhrase(cleanLine(item.en)); };
   if ($('saveLaraSettingsBtn')) $('saveLaraSettingsBtn').onclick = async () => {
     const cfg = saveLaraConfigToLocal();
