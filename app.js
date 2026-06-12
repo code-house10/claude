@@ -4802,6 +4802,352 @@ Return JSON ONLY, no extra text, in exactly this shape:
     renderSpeakCoach();
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // DIALOGUE PRACTICE — context-weaving saved vocab into natural dialogue
+  //
+  // The user picks any subset of saved words/phrases/lines, optionally types
+  // a situation ("at a café"), chooses an AI provider, and the model writes
+  // a short natural daily-life dialogue weaving in every selected term, plus
+  // an Egyptian-Arabic translation per line. The goal is contextual recall:
+  // hearing the words embedded in connected speech makes them stick without
+  // active effort during real conversations.
+  //
+  // History is kept in localStorage so the user can replay previous dialogues
+  // without burning AI quota again.
+  // ════════════════════════════════════════════════════════════════
+
+  const DIALOGUE_HISTORY_KEY = 'jm_dialogues';
+  const DIALOGUE_HISTORY_MAX = 30;
+
+  function dialogueHistory() {
+    return readJSON(DIALOGUE_HISTORY_KEY, []);
+  }
+  function saveDialogueToHistory(entry) {
+    const list = dialogueHistory();
+    list.unshift(entry);
+    while (list.length > DIALOGUE_HISTORY_MAX) list.pop();
+    writeJSON(DIALOGUE_HISTORY_KEY, list);
+  }
+  function deleteDialogueFromHistory(id) {
+    writeJSON(DIALOGUE_HISTORY_KEY, dialogueHistory().filter(d => d.id !== id));
+  }
+
+  function buildDialoguePrompt(items, opts) {
+    const situation = cleanLine(opts.situation || '');
+    const length = opts.length || 'short';   // short | medium | long
+    const turns = length === 'long' ? '10-12' : (length === 'medium' ? '6-8' : '4-6');
+    const list = items.map((it, i) => `${i + 1}. "${cleanLine(it.term)}"${it.ar ? ` (= ${it.ar})` : ''}`).join('\n');
+    return `You are an English teacher writing natural everyday dialogues for an Egyptian Arabic-speaking learner.
+
+WRITE a short, natural, REALISTIC English dialogue between TWO speakers (A and B) about a common everyday situation, that NATURALLY uses EVERY one of these target terms (in their natural inflected form is fine — e.g. "recommended" for "recommend"):
+
+TARGET TERMS:
+${list}
+
+REQUIREMENTS:
+- ${turns} turns total, alternating A / B / A / B.
+- Conversational, not textbook. Use contractions and natural connectors ("yeah, well, actually, by the way…").
+- Every target term MUST appear at least once across the dialogue. It must feel natural, never forced.
+- Situation: ${situation || 'pick a believable daily situation that fits the words (café, work chat, calling a friend, planning a trip, asking for advice, family dinner, etc.)'}
+- For EACH line, give an Egyptian colloquial Arabic translation (المصرية الدارجة) — friendly, not formal MSA, no transliteration.
+- Keep each line short enough to say in one breath.
+
+Return JSON ONLY in this exact shape:
+{
+  "situation": "<one short English sentence describing the setting>",
+  "situation_ar": "<same setting in Egyptian Arabic>",
+  "turns": [
+    {"speaker": "A", "en": "...", "ar": "..."},
+    {"speaker": "B", "en": "...", "ar": "..."}
+  ]
+}`;
+  }
+
+  async function generateDialoguePuter(items, opts) {
+    if (!window.puter?.ai?.chat) throw new Error('Puter AI is not loaded.');
+    const prompt = buildDialoguePrompt(items, opts);
+    let lastError = null;
+    for (const model of PUTER_SUBTITLE_MODELS) {
+      try {
+        const resp = await window.puter.ai.chat(prompt, { model, temperature: 0.55, max_tokens: 1400 });
+        const parsed = parseJsonLoose(puterResponseToText(resp));
+        if (parsed && Array.isArray(parsed.turns) && parsed.turns.length) return parsed;
+      } catch (e) { lastError = e; console.warn('Puter dialogue failed with model', model, e); }
+    }
+    throw lastError || new Error('Puter dialogue generation failed.');
+  }
+
+  async function generateDialogueOpenRouter(items, opts) {
+    const cfg = getOpenRouterConfig();
+    if (!cfg.apiKey) throw new Error('Add an OpenRouter key first (Menu → Settings → OpenRouter).');
+    const prompt = buildDialoguePrompt(items, opts);
+    const parsed = await callOpenRouterJson(prompt, {
+      temperature: 0.55,
+      maxTokens: 1400,
+      system: 'You write natural daily-life English dialogues with Egyptian Arabic translations. Return JSON only.'
+    });
+    if (parsed && Array.isArray(parsed.turns) && parsed.turns.length) return parsed;
+    throw new Error('OpenRouter returned no dialogue.');
+  }
+
+  async function generateDialogue(items, opts) {
+    if (opts.provider === 'openrouter') {
+      try { return await generateDialogueOpenRouter(items, opts); }
+      catch (e) {
+        console.warn('OpenRouter dialogue unavailable, trying Puter:', e);
+        return await generateDialoguePuter(items, opts);
+      }
+    }
+    try { return await generateDialoguePuter(items, opts); }
+    catch (e) {
+      const cfg = getOpenRouterConfig();
+      if (cfg.apiKey) { console.warn('Puter failed, trying OpenRouter:', e); return await generateDialogueOpenRouter(items, opts); }
+      throw e;
+    }
+  }
+
+  // ───────── Dialogue Practice picker UI ─────────
+
+  function dialogueAvailableItems() {
+    // Flatten saved words/phrases + saved lines into one list with kind+term+ar.
+    initLocalVocab();
+    const out = [];
+    for (const w of (state.savedWords || [])) {
+      if (!w.word) continue;
+      out.push({ id: 'w:' + (w.key || wordKey(w.word)), kind: w.kind || 'word', term: w.word, ar: w.ar || '' });
+    }
+    for (const l of (state.savedLines || [])) {
+      if (!l.en) continue;
+      out.push({ id: 'l:' + (l.key || ''), kind: 'line', term: cleanLine(l.en), ar: cleanLine(l.ar || '') });
+    }
+    return out;
+  }
+
+  function ensureDialogueState(reset = false) {
+    if (reset || !state.dialogue) {
+      state.dialogue = {
+        step: 'picker',            // picker | generating | result | history
+        selectedIds: new Set(),
+        filterKind: 'all',         // all | word | phrase | line
+        search: '',
+        situation: '',
+        length: 'short',
+        provider: 'puter',
+        result: null,
+        error: ''
+      };
+    }
+    return state.dialogue;
+  }
+
+  function openDialoguePractice() {
+    openMenu(false);
+    ensureDialogueState(true);
+    renderDialogue();
+    openModal('dialogueModal');
+  }
+
+  function renderDialogue() {
+    const s = state.dialogue;
+    const body = $('dialogueBody');
+    if (!body || !s) return;
+    if (s.step === 'picker')     return renderDialoguePicker(body);
+    if (s.step === 'generating') return renderDialogueGenerating(body);
+    if (s.step === 'result')     return renderDialogueResult(body);
+    if (s.step === 'history')    return renderDialogueHistory(body);
+  }
+
+  function renderDialoguePicker(body) {
+    const s = state.dialogue;
+    const all = dialogueAvailableItems();
+    const q = s.search.toLowerCase();
+    const filtered = all.filter(it => {
+      if (s.filterKind !== 'all' && it.kind !== s.filterKind) return false;
+      if (!q) return true;
+      return it.term.toLowerCase().includes(q) || (it.ar || '').includes(q);
+    });
+    const orRouterReady = !!getOpenRouterConfig().apiKey;
+
+    const items = filtered.length ? filtered.map(it => {
+      const checked = s.selectedIds.has(it.id);
+      const arShort = it.ar ? ` <span class="d-ar" dir="rtl">${escapeHtml(it.ar.slice(0,40))}</span>` : '';
+      return `<label class="d-item ${checked ? 'on' : ''}" data-d-toggle="${escapeHtml(it.id)}">
+        <input type="checkbox" ${checked ? 'checked' : ''} />
+        <span class="d-kind d-kind-${it.kind}">${it.kind === 'line' ? '📜' : (it.kind === 'phrase' ? '💬' : (it.kind === 'template' ? '📐' : '🔤'))}</span>
+        <span class="d-term" dir="ltr">${escapeHtml(it.term.slice(0,60))}</span>${arShort}
+      </label>`;
+    }).join('') : '<p class="hint-small" style="padding:14px;text-align:center">No saved items match this filter. Save some words / phrases first.</p>';
+
+    const sel = s.selectedIds.size;
+    const histCount = dialogueHistory().length;
+
+    body.innerHTML = `
+      <div class="d-toolbar">
+        <input id="dSearch" class="text-input d-search" type="search" placeholder="🔎 Search saved items…" value="${escapeHtml(s.search)}" />
+        <div class="d-filters">
+          ${['all','word','phrase','line'].map(k => `<button class="d-filter${s.filterKind===k?' on':''}" data-d-filter="${k}">${k==='all'?'All':(k==='word'?'🔤 Words':(k==='phrase'?'💬 Phrases':'📜 Lines'))}</button>`).join('')}
+        </div>
+      </div>
+      <div class="d-pick-summary">
+        <b>${sel}</b> selected
+        ${sel > 0 ? `<button class="small-btn" data-d-clear>Clear</button>` : ''}
+        ${histCount > 0 ? `<button class="small-btn" data-d-history>📚 History (${histCount})</button>` : ''}
+      </div>
+      <div class="d-list">${items}</div>
+      <details class="d-options" ${sel > 0 ? 'open' : ''}>
+        <summary>⚙️ Dialogue options</summary>
+        <label class="d-field">
+          <span>Situation (optional)</span>
+          <input id="dSituation" class="text-input" dir="ltr" placeholder="e.g. at a coffee shop, calling a friend…" value="${escapeHtml(s.situation)}" />
+        </label>
+        <div class="d-field">
+          <span>Length</span>
+          <div class="d-seg">
+            ${['short','medium','long'].map(L => `<button class="d-seg-btn${s.length===L?' on':''}" data-d-length="${L}">${L === 'short' ? '4–6 turns' : (L === 'medium' ? '6–8 turns' : '10–12 turns')}</button>`).join('')}
+          </div>
+        </div>
+        <div class="d-field">
+          <span>AI engine</span>
+          <div class="d-seg">
+            <button class="d-seg-btn${s.provider==='puter'?' on':''}" data-d-provider="puter">🎙️ Puter AI<small>free · Egyptian voice</small></button>
+            <button class="d-seg-btn${s.provider==='openrouter'?' on':''}${orRouterReady?'':' disabled'}" data-d-provider="openrouter" ${orRouterReady?'':'title="Set an OpenRouter key first"'}>🤖 OpenRouter<small>${orRouterReady ? 'free models' : 'needs key'}</small></button>
+          </div>
+        </div>
+      </details>
+      <button class="full-btn d-generate" ${sel === 0 ? 'disabled' : ''} data-d-generate>✨ Generate dialogue with ${sel} ${sel === 1 ? 'term' : 'terms'}</button>
+    `;
+    // Live search input wiring
+    const search = body.querySelector('#dSearch');
+    if (search) search.oninput = (e) => { s.search = e.target.value; renderDialogue(); };
+    const sit = body.querySelector('#dSituation');
+    if (sit) sit.oninput = (e) => { s.situation = e.target.value; };
+  }
+
+  function renderDialogueGenerating(body) {
+    const s = state.dialogue;
+    body.innerHTML = `<div class="d-generating">
+      <div class="d-spin">🧠</div>
+      <p><b>${s.provider === 'openrouter' ? 'OpenRouter' : 'Puter AI'} is writing your dialogue…</b></p>
+      <p class="hint-small">Weaving ${s.selectedIds.size} term${s.selectedIds.size === 1 ? '' : 's'} into a natural conversation.</p>
+      <button class="small-btn" data-d-back>← Back to picker</button>
+    </div>`;
+  }
+
+  function highlightTargetsInLine(en, terms) {
+    let html = escapeHtml(en);
+    // Highlight longest terms first so multi-word phrases match before their components.
+    const sorted = [...terms].sort((a, b) => b.length - a.length);
+    for (const t of sorted) {
+      if (!t) continue;
+      const esc = escapeHtml(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`\\b(${esc}\\w*)\\b`, 'gi');
+      html = html.replace(re, '<mark class="d-hit">$1</mark>');
+    }
+    return html;
+  }
+
+  function renderDialogueResult(body) {
+    const s = state.dialogue;
+    const r = s.result;
+    if (!r) { body.innerHTML = `<p class="hint-small">No dialogue yet.</p>`; return; }
+    const terms = (r.targets || []).map(t => t.term);
+    const turnsHtml = (r.turns || []).map((t, i) => `<div class="d-turn d-${t.speaker === 'B' ? 'b' : 'a'}">
+      <span class="d-spkr">${escapeHtml(t.speaker || (i % 2 === 0 ? 'A' : 'B'))}</span>
+      <div class="d-turn-body">
+        <div class="d-en" dir="ltr">${highlightTargetsInLine(cleanLine(t.en), terms)}</div>
+        ${t.ar ? `<div class="d-ar-line" dir="rtl">${escapeHtml(cleanLine(t.ar))}</div>` : ''}
+        <button class="ex-speak" data-speak-ex="${escapeHtml(cleanLine(t.en))}" title="Speak">🔊</button>
+      </div>
+    </div>`).join('');
+
+    const targetsBar = `<div class="d-targets">${(r.targets || []).map(t => `<span class="d-target-chip" dir="ltr">${escapeHtml(t.term)}</span>`).join('')}</div>`;
+
+    body.innerHTML = `
+      <div class="d-result-head">
+        <button class="small-btn" data-d-back>← Pick again</button>
+        <button class="small-btn primary-pill" data-d-play-all>▶ Play all</button>
+      </div>
+      ${r.situation ? `<div class="d-situation"><b>${escapeHtml(r.situation)}</b>${r.situation_ar ? `<p dir="rtl">${escapeHtml(r.situation_ar)}</p>` : ''}</div>` : ''}
+      ${targetsBar}
+      <div class="d-dialogue">${turnsHtml}</div>
+      <div class="d-result-foot">
+        <button class="small-btn" data-d-regenerate>🔄 Regenerate</button>
+        <button class="small-btn" data-d-save-result>${r.savedAt ? '✓ Saved' : '💾 Save'}</button>
+      </div>
+    `;
+  }
+
+  function renderDialogueHistory(body) {
+    const list = dialogueHistory();
+    if (!list.length) { body.innerHTML = `<div class="d-result-head"><button class="small-btn" data-d-back>← Picker</button></div><p class="hint-small" style="padding:14px;text-align:center">No saved dialogues yet.</p>`; return; }
+    const items = list.map(d => `<div class="d-hist-item">
+      <div class="d-hist-meta">
+        <b dir="ltr">${escapeHtml(d.situation || 'Dialogue')}</b>
+        <small>${(d.targets || []).length} term${(d.targets || []).length === 1 ? '' : 's'} · ${(d.turns || []).length} turns · ${new Date(d.savedAt || d.id || Date.now()).toLocaleDateString()}</small>
+      </div>
+      <div class="d-hist-actions">
+        <button class="small-btn" data-d-open-hist="${escapeHtml(d.id)}">Open</button>
+        <button class="small-btn danger" data-d-del-hist="${escapeHtml(d.id)}">✕</button>
+      </div>
+    </div>`).join('');
+    body.innerHTML = `<div class="d-result-head"><button class="small-btn" data-d-back>← Picker</button><b>📚 Saved dialogues</b></div><div class="d-hist-list">${items}</div>`;
+  }
+
+  async function startDialogueGeneration() {
+    const s = state.dialogue;
+    const all = dialogueAvailableItems();
+    const picked = all.filter(it => s.selectedIds.has(it.id));
+    if (!picked.length) { toast('Pick at least one item'); return; }
+    s.step = 'generating';
+    renderDialogue();
+    try {
+      const result = await generateDialogue(
+        picked.map(it => ({ term: it.term, ar: it.ar })),
+        { situation: s.situation, length: s.length, provider: s.provider }
+      );
+      s.result = {
+        id: 'd_' + Date.now(),
+        createdAt: new Date().toISOString(),
+        targets: picked.map(it => ({ id: it.id, term: it.term, ar: it.ar })),
+        situation: cleanLine(result.situation || ''),
+        situation_ar: cleanLine(result.situation_ar || ''),
+        turns: (result.turns || []).map(t => ({
+          speaker: String(t.speaker || '').toUpperCase() === 'B' ? 'B' : 'A',
+          en: cleanLine(t.en || ''),
+          ar: cleanPuterArabicTranslation(t.ar || '')
+        })),
+        provider: s.provider
+      };
+      s.step = 'result';
+      s.error = '';
+    } catch (e) {
+      s.step = 'picker';
+      s.error = e.message || String(e);
+      toast('Dialogue generation failed');
+    }
+    renderDialogue();
+    if (s.error) $('dialogueBody').insertAdjacentHTML('afterbegin', `<div class="speak-error">${escapeHtml(s.error)}</div>`);
+  }
+
+  // Play all turns one after another via Web Speech API.
+  function playDialogueAll() {
+    const s = state.dialogue;
+    if (!s?.result?.turns?.length) return;
+    try { window.speechSynthesis?.cancel(); } catch {}
+    const queue = s.result.turns.map(t => cleanLine(t.en)).filter(Boolean);
+    let i = 0;
+    const speakNext = () => {
+      if (i >= queue.length) return;
+      const u = new SpeechSynthesisUtterance(queue[i]);
+      u.lang = 'en-US'; u.rate = 0.95;
+      const v = window.speechSynthesis.getVoices().find(x => /en-US/i.test(x.lang)) || window.speechSynthesis.getVoices().find(x => /^en/i.test(x.lang));
+      if (v) u.voice = v;
+      u.onend = () => { i++; setTimeout(speakNext, 250); };
+      window.speechSynthesis.speak(u);
+    };
+    speakNext();
+  }
+
   // ───────── Connected speech (reductions) reference ─────────
 
   function reductionCardHtml(r) {
@@ -4987,6 +5333,22 @@ Return JSON ONLY, no extra text, in exactly this shape:
     const openTermBtn = e.target.closest('[data-open-term]'); if (openTermBtn) { openDict(openTermBtn.dataset.openTerm, Number(openTermBtn.dataset.index)); return; }
     const speakExBtn = e.target.closest('[data-speak-ex]'); if (speakExBtn) { speak(speakExBtn.dataset.speakEx); return; }
     if (e.target.closest('[data-open-connected]')) { closeModal('reductionModal'); showConnectedSpeech(); return; }
+
+    // ── Dialogue practice ─────────────────────────────────────────
+    const dTog = e.target.closest('[data-d-toggle]');
+    if (dTog) { const id = dTog.dataset.dToggle; const s = ensureDialogueState(); if (s.selectedIds.has(id)) s.selectedIds.delete(id); else s.selectedIds.add(id); renderDialogue(); return; }
+    const dFil = e.target.closest('[data-d-filter]'); if (dFil) { ensureDialogueState().filterKind = dFil.dataset.dFilter; renderDialogue(); return; }
+    if (e.target.closest('[data-d-clear]')) { ensureDialogueState().selectedIds.clear(); renderDialogue(); return; }
+    const dLen = e.target.closest('[data-d-length]'); if (dLen) { ensureDialogueState().length = dLen.dataset.dLength; renderDialogue(); return; }
+    const dProv = e.target.closest('[data-d-provider]'); if (dProv) { if (dProv.classList.contains('disabled')) { toast('Add an OpenRouter key in Settings first'); return; } ensureDialogueState().provider = dProv.dataset.dProvider; renderDialogue(); return; }
+    if (e.target.closest('[data-d-generate]')) { startDialogueGeneration(); return; }
+    if (e.target.closest('[data-d-back]')) { const s = ensureDialogueState(); s.step = 'picker'; renderDialogue(); return; }
+    if (e.target.closest('[data-d-regenerate]')) { startDialogueGeneration(); return; }
+    if (e.target.closest('[data-d-play-all]')) { playDialogueAll(); return; }
+    if (e.target.closest('[data-d-history]')) { ensureDialogueState().step = 'history'; renderDialogue(); return; }
+    if (e.target.closest('[data-d-save-result]')) { const s = ensureDialogueState(); if (s.result) { s.result.savedAt = new Date().toISOString(); saveDialogueToHistory(s.result); toast('Dialogue saved'); renderDialogue(); } return; }
+    const dOpenH = e.target.closest('[data-d-open-hist]'); if (dOpenH) { const id = dOpenH.dataset.dOpenHist; const d = dialogueHistory().find(x => x.id === id); if (d) { const s = ensureDialogueState(); s.result = d; s.step = 'result'; renderDialogue(); } return; }
+    const dDelH = e.target.closest('[data-d-del-hist]'); if (dDelH) { deleteDialogueFromHistory(dDelH.dataset.dDelHist); renderDialogue(); return; }
     const savePhrase = e.target.closest('[data-save-phrase]'); if (savePhrase) { savePhraseFromSubtitle(savePhrase.dataset.savePhrase, Number(savePhrase.dataset.index)); return; }
     const refreshOneTemplate = e.target.closest('[data-refresh-template-examples]'); if (refreshOneTemplate) { refreshTemplateExamplesByIndex(refreshOneTemplate.dataset.refreshTemplateExamples); return; }
     const refreshAllTemplates = e.target.closest('[data-refresh-all-template-examples]'); if (refreshAllTemplates) { refreshAllTemplateExamples(); return; }
@@ -5131,6 +5493,7 @@ Return JSON ONLY, no extra text, in exactly this shape:
   $('menuSavedLines').onclick = () => { openMenu(false); showSaved('lines'); };
   $('menuReviewCards').onclick = showReviewCards;
   if ($('menuConnectedSpeech')) $('menuConnectedSpeech').onclick = showConnectedSpeech;
+  if ($('menuDialoguePractice')) $('menuDialoguePractice').onclick = openDialoguePractice;
   if ($('menuSpeakingCoach')) $('menuSpeakingCoach').onclick = () => { openMenu(false); openSpeakingCoach(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0); };
   $('menuSaveCloud').onclick = saveLessonToCloud;
   if ($('menuSyncSavedCloud')) $('menuSyncSavedCloud').onclick = () => { openMenu(false); syncSavedItemsToCloud({ silent: false, reason: 'manual' }); };
