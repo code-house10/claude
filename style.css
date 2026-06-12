@@ -250,3 +250,8 @@
 .word.hf:not(.active):not(:hover){background:rgba(124,58,237,.13);box-shadow:inset 0 -2px 0 rgba(124,58,237,.6);color:inherit}
 .dock-en .word.hf:not(.active):not(:hover){background:rgba(167,139,250,.22);box-shadow:inset 0 -2px 0 rgba(167,139,250,.9)}
 .dict-context .word.hf:not(.active):not(:hover){background:rgba(124,58,237,.13);box-shadow:inset 0 -2px 0 rgba(124,58,237,.6)}
+/* Orange tier: CEFR B1–C2 words (within the high-frequency 3000) — the ones
+   worth actively learning. Distinct from amber 'active' and purple 'hf'. */
+.word.cefr:not(.active):not(:hover){background:rgba(234,88,12,.15);box-shadow:inset 0 -2px 0 rgba(234,88,12,.85);color:inherit;font-weight:900}
+.dock-en .word.cefr:not(.active):not(:hover){background:rgba(251,146,60,.28);box-shadow:inset 0 -2px 0 rgba(251,146,60,.95)}
+.dict-context .word.cefr:not(.active):not(:hover){background:rgba(234,88,12,.15);box-shadow:inset 0 -2px 0 rgba(234,88,12,.85)}

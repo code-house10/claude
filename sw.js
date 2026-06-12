@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-keywords-highlight-v7';
-const ASSETS = ['./', './index.html', './style.css?v=keywords-highlight-v7', './app.js?v=keywords-highlight-v7'];
+const CACHE_NAME = 'jungle-movie-cefr-levels-v8';
+const ASSETS = ['./', './index.html', './style.css?v=cefr-levels-v8', './app.js?v=cefr-levels-v8'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

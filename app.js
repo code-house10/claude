@@ -48,7 +48,9 @@
     // High-frequency vocabulary highlighting
     highlightHF: localStorage.getItem('jm_highlight_hf') !== '0',
     hfWords: null,     // Set of high-frequency words (top 3000 minus A1 stopwords)
-    hfCount: 0         // distinct highlighted words in the current subtitle file
+    hfCount: 0,        // distinct high-frequency (purple) words in the current file
+    cefrAdv: null,     // { word: 'B1'|'B2'|'C1'|'C2' } — advanced CEFR words
+    advCount: 0        // distinct advanced (orange) words in the current file
   };
 
   const el = {
@@ -218,22 +220,128 @@
     return b !== t && state.hfWords.has(b);
   }
 
+  // ───────── CEFR B1–C2 advanced layer ─────────
+  // On top of the high-frequency highlight, words that are also CEFR level
+  // B1/B2/C1/C2 get a distinct ORANGE highlight — these are the high-value
+  // words worth actively learning (e.g. recommend / recommendation). The
+  // condition is that the word is ALSO a high-frequency word.
+  //
+  // Source: the open CEFR-J (A1–B2) + Octanove (C1–C2) vocabulary profiles.
+  // We keep only B1+ entries, cache them, and intersect with the HF set.
+
+  const CEFR_SOURCES = [
+    'https://cdn.jsdelivr.net/gh/openlanguageprofiles/olp-en-cefrj@master/cefrj-vocabulary-profile-1.5.csv',
+    'https://cdn.jsdelivr.net/gh/openlanguageprofiles/olp-en-cefrj@master/octanove-vocabulary-profile-c1c2-1.0.csv'
+  ];
+  const CEFR_CACHE_KEY = 'jm_cefr_adv_v1';
+  const CEFR_RANK = { A1: 1, A2: 2, B1: 3, B2: 4, C1: 5, C2: 6 };
+
+  async function loadCefrAdvanced() {
+    if (state.cefrAdv) return state.cefrAdv;
+    try {
+      const c = localStorage.getItem(CEFR_CACHE_KEY);
+      if (c) { const o = JSON.parse(c); if (o && typeof o === 'object') { state.cefrAdv = o; return o; } }
+    } catch {}
+    const map = {};
+    let ok = false;
+    for (const url of CEFR_SOURCES) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const text = await res.text();
+        for (const line of text.split(/\r?\n/)) {
+          if (!line) continue;
+          const cells = line.split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+          const level = cells.find(c => /^[abc][12]$/i.test(c));
+          if (!level) continue;
+          const lv = level.toUpperCase();
+          if (lv === 'A1' || lv === 'A2') continue;     // keep B1+ only
+          const head = cells.find(c => /^[a-zA-Z][a-zA-Z' -]*$/.test(c) && c.length > 1 && !/^[abc][12]$/i.test(c));
+          if (!head) continue;
+          const w = head.toLowerCase().trim();
+          if (!w || w.length < 3) continue;
+          if (!map[w] || CEFR_RANK[lv] < CEFR_RANK[map[w]]) map[w] = lv; // keep easiest level
+          ok = true;
+        }
+      } catch (e) { console.warn('CEFR list fetch failed:', url, e); }
+    }
+    if (ok) { try { localStorage.setItem(CEFR_CACHE_KEY, JSON.stringify(map)); } catch {} state.cefrAdv = map; return map; }
+    state.cefrAdv = {};   // empty → fall back to the heuristic below
+    return state.cefrAdv;
+  }
+
+  // Candidate stems so derived forms match a base/headword entry
+  // (recommendation → recommend, happily → happy, information → inform…).
+  function derivationalStems(token) {
+    const t = String(token || '').toLowerCase();
+    const out = new Set([t, baseVerb(t)]);
+    const rules = [
+      [/(.{3,})ations?$/, '$1'], [/(.{3,})ations?$/, '$1ate'],
+      [/(.{3,})tions?$/, '$1t'], [/(.{3,})sions?$/, '$1d'],
+      [/(.{3,})ments?$/, '$1'], [/(.{3,})ness$/, '$1'],
+      [/(.{3,})ities$/, '$1ity'], [/(.{3,})ity$/, '$1'],
+      [/(.{3,})ously$/, '$1ous'], [/(.{3,})ous$/, '$1'],
+      [/(.{3,})ively$/, '$1ive'], [/(.{3,})ive$/, '$1'],
+      [/(.{3,})ically$/, '$1ic'], [/(.{3,})ally$/, '$1al'], [/(.{3,})ally$/, '$1'],
+      [/(.{4,})ly$/, '$1'], [/(.{3,})ers?$/, '$1'],
+      [/(.{3,})ance$/, '$1'], [/(.{3,})ence$/, '$1'],
+      [/(.{3,})able$/, '$1'], [/(.{3,})ible$/, '$1'],
+      [/(.{3,})ier$/, '$1y'], [/(.{3,})iest$/, '$1y'], [/(.{3,})ily$/, '$1y']
+    ];
+    for (const [re, rep] of rules) { if (re.test(t)) out.add(t.replace(re, rep)); }
+    return [...out].filter(w => w && w.length >= 3);
+  }
+
+  // High-frequency membership that also accepts derived forms.
+  function isHfLemma(token) {
+    if (!state.hfWords) return false;
+    for (const c of derivationalStems(token)) if (state.hfWords.has(c)) return true;
+    return false;
+  }
+
+  // CEFR level (B1+) for a token via its stems, or '' if not advanced/unknown.
+  function cefrLevelOf(token) {
+    const map = state.cefrAdv;
+    if (!map) return '';
+    for (const c of derivationalStems(token)) { if (map[c]) return map[c]; }
+    return '';
+  }
+
+  function heuristicAdvanced(t) {
+    // Offline fallback: HF words that look morphologically advanced.
+    return t.length >= 8 || /(?:tion|sion|ment|ness|ity|ous|ive|ance|ence|ical|ize|ise|ate|ify)$/.test(t);
+  }
+
+  // Orange tier: high-frequency AND CEFR B1–C2 (the words worth learning).
+  function isAdvancedWord(token) {
+    if (!state.highlightHF) return false;
+    const t = String(token || '').toLowerCase();
+    if (!t || t.length < 3 || A1_STOPWORDS.has(t)) return false;
+    if (!isHfLemma(t)) return false;                       // must be high-frequency
+    if (state.cefrAdv && Object.keys(state.cefrAdv).length) return !!cefrLevelOf(t);
+    return heuristicAdvanced(t);                           // offline fallback
+  }
+
   // Count distinct highlighted words across the loaded subtitles (for the badge).
+  // Mirrors wordHtml's precedence: a word is counted as advanced OR plain-HF,
+  // never both.
   function recomputeHfCount() {
-    if (!state.hfWords || !state.highlightHF) { state.hfCount = 0; return; }
-    const seen = new Set();
+    if ((!state.hfWords) || !state.highlightHF) { state.hfCount = 0; state.advCount = 0; return; }
+    const hf = new Set(), adv = new Set();
     for (const item of state.subtitles) {
       for (const tok of tokenize(item.en)) {
         const t = tok.toLowerCase();
-        if (isHighFreqWord(t)) seen.add(state.hfWords.has(t) ? t : baseVerb(t));
+        if (isAdvancedWord(t)) adv.add(cefrLevelOf(t) ? t : t);
+        else if (isHighFreqWord(t)) hf.add(state.hfWords.has(t) ? t : baseVerb(t));
       }
     }
-    state.hfCount = seen.size;
+    state.hfCount = hf.size;
+    state.advCount = adv.size;
   }
 
-  // Load the list, then refresh the UI so highlights + the badge appear.
+  // Load both lists, then refresh the UI so highlights + the badge appear.
   function ensureHfThenRefresh() {
-    loadHighFreqWords().then(() => {
+    Promise.all([loadHighFreqWords(), loadCefrAdvanced()]).then(() => {
       recomputeHfCount();
       renderList(state.listCenter);
       updateDock(null);
@@ -2580,8 +2688,13 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       if (/^[A-Za-zÀ-ÿ0-9]+(?:[-'][A-Za-zÀ-ÿ0-9]+)*$/.test(part)) {
         wordNo++;
         const active = wordNo === activeWordIndex ? ' active' : '';
-        const hf = isHighFreqWord(part) ? ' hf' : '';
-        return `<span class="word${active}${hf}" data-word="${escapeHtml(part)}">${escapeHtml(part)}</span>`;
+        // Orange CEFR tier wins over the purple high-frequency tier.
+        let tier = '', levelAttr = '';
+        if (state.highlightHF) {
+          if (isAdvancedWord(part)) { tier = ' cefr'; const lv = cefrLevelOf(part); if (lv) levelAttr = ` data-level="${lv}"`; }
+          else if (isHighFreqWord(part)) tier = ' hf';
+        }
+        return `<span class="word${active}${tier}" data-word="${escapeHtml(part)}"${levelAttr}>${escapeHtml(part)}</span>`;
       }
       return escapeHtml(part);
     }).join('');
@@ -2662,7 +2775,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     const start = Math.max(0, state.listCenter - state.renderRadius);
     const end = Math.min(state.subtitles.length, state.listCenter + state.renderRadius + 1);
     el.listInfo.textContent = state.subtitles.length
-      ? `Showing ${start+1}-${end} of ${state.subtitles.length}` + (state.highlightHF && state.hfCount ? ` · ✨ ${state.hfCount} key words` : '')
+      ? `Showing ${start+1}-${end} of ${state.subtitles.length}`
+        + (state.highlightHF && state.hfCount ? ` · 🟣 ${state.hfCount} key` : '')
+        + (state.highlightHF && state.advCount ? ` · 🟠 ${state.advCount} B1–C2` : '')
       : 'Upload SRT to start';
     const chunks = [];
     if (start > 0) chunks.push(`<button class="small-btn" data-render-center="${Math.max(0,start-state.renderRadius)}">Load previous</button>`);
@@ -4914,7 +5029,7 @@ Return JSON ONLY, no extra text, in exactly this shape:
     localStorage.setItem('jm_highlight_hf', state.highlightHF ? '1' : '0');
     updateControls();
     if (state.highlightHF) ensureHfThenRefresh();
-    else { state.hfCount = 0; renderList(state.listCenter); updateDock(null); }
+    else { state.hfCount = 0; state.advCount = 0; renderList(state.listCenter); updateDock(null); }
     toast(state.highlightHF ? 'Key-word highlighting on' : 'Highlighting off');
   };
   $('goActiveBtn').onclick = () => jumpToCard(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0);
@@ -5026,8 +5141,9 @@ Return JSON ONLY, no extra text, in exactly this shape:
     setStatus(`${state.subtitles.length} subtitles restored`);
     ensureHfThenRefresh();
   } else {
-    // Warm the cache so the first uploaded file highlights instantly.
+    // Warm the caches so the first uploaded file highlights instantly.
     loadHighFreqWords().catch(() => {});
+    loadCefrAdvanced().catch(() => {});
   }
   if (savedUrl && !savedUrl.startsWith('blob:')) {
     state.videoUrl = savedUrl;
