@@ -182,7 +182,47 @@
     return set;
   }
 
+  // Prefer the user's own bundled vocabulary (vocab-data.js → window.JM_VOCAB):
+  // a curated CEFR-graded 3000+ word list with Arabic meanings, plus connected-
+  // speech reductions. When present it becomes the authoritative, fully-offline
+  // source for highlighting, dictionary meanings and the connected-speech guide,
+  // so we skip the external jsDelivr fetches entirely.
+  function initLocalVocab() {
+    if (state.vocabReady) return true;
+    const V = window.JM_VOCAB;
+    if (!V || !V.cefr) return false;
+
+    // Highlighting sources
+    state.cefrLevels = V.cefr;                          // { word: 'A1'..'C2' }
+    state.hfWords = new Set(Object.keys(V.cefr));       // all graded words = high-frequency set
+    const adv = {};
+    for (const [w, lv] of Object.entries(V.cefr)) {
+      if (lv === 'B1' || lv === 'B2' || lv === 'C1' || lv === 'C2') adv[w] = lv;
+    }
+    state.cefrAdv = adv;
+
+    // Instant offline Arabic meanings  { word: {ar,pos,level} }
+    state.meanings = V.meanings || {};
+
+    // Connected-speech reductions
+    state.reductions = Array.isArray(V.reductions) ? V.reductions : [];
+    state.reductionPatterns = Array.isArray(V.patterns) ? V.patterns : [];
+    state.reductionByForm = new Map();
+    state.reductionForms = new Set();
+    for (const r of state.reductions) {
+      // index by the connected form(s), tokenised the same way the renderer splits words
+      const forms = String(r.connected || '').split('/').map(s => s.trim()).filter(Boolean);
+      for (const f of forms) {
+        const key = f.toLowerCase().replace(/[^a-z']/g, '').replace(/^'+|'+$/g, '');
+        if (key.length >= 2) { state.reductionForms.add(key); if (!state.reductionByForm.has(key)) state.reductionByForm.set(key, r); }
+      }
+    }
+    state.vocabReady = true;
+    return true;
+  }
+
   async function loadHighFreqWords() {
+    if (initLocalVocab()) return state.hfWords;
     if (state.hfWords) return state.hfWords;
     // 1) cached list from a previous session
     try {
@@ -237,6 +277,7 @@
   const CEFR_RANK = { A1: 1, A2: 2, B1: 3, B2: 4, C1: 5, C2: 6 };
 
   async function loadCefrAdvanced() {
+    if (initLocalVocab()) return state.cefrAdv;
     if (state.cefrAdv) return state.cefrAdv;
     try {
       const c = localStorage.getItem(CEFR_CACHE_KEY);
@@ -312,6 +353,14 @@
     return t.length >= 8 || /(?:tion|sion|ment|ness|ity|ous|ive|ance|ence|ical|ize|ise|ate|ify)$/.test(t);
   }
 
+  // Returns the reduction key (e.g. 'gonna') if a token is a connected-speech
+  // reduced form, else ''. Used to highlight + explain fast-speech forms.
+  function reductionKey(token) {
+    if (!state.highlightHF || !state.reductionForms) return '';
+    const t = String(token || '').toLowerCase().replace(/[^a-z']/g, '').replace(/^'+|'+$/g, '');
+    return state.reductionForms.has(t) ? t : '';
+  }
+
   // Orange tier: high-frequency AND CEFR B1–C2 (the words worth learning).
   function isAdvancedWord(token) {
     if (!state.highlightHF) return false;
@@ -326,17 +375,20 @@
   // Mirrors wordHtml's precedence: a word is counted as advanced OR plain-HF,
   // never both.
   function recomputeHfCount() {
-    if ((!state.hfWords) || !state.highlightHF) { state.hfCount = 0; state.advCount = 0; return; }
-    const hf = new Set(), adv = new Set();
+    if ((!state.hfWords) || !state.highlightHF) { state.hfCount = 0; state.advCount = 0; state.redCount = 0; return; }
+    const hf = new Set(), adv = new Set(), red = new Set();
     for (const item of state.subtitles) {
       for (const tok of tokenize(item.en)) {
         const t = tok.toLowerCase();
-        if (isAdvancedWord(t)) adv.add(cefrLevelOf(t) ? t : t);
+        const rk = reductionKey(t);
+        if (rk) red.add(rk);
+        else if (isAdvancedWord(t)) adv.add(t);
         else if (isHighFreqWord(t)) hf.add(state.hfWords.has(t) ? t : baseVerb(t));
       }
     }
     state.hfCount = hf.size;
     state.advCount = adv.size;
+    state.redCount = red.size;
   }
 
   // Load both lists, then refresh the UI so highlights + the badge appear.
@@ -2688,13 +2740,15 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       if (/^[A-Za-zÀ-ÿ0-9]+(?:[-'][A-Za-zÀ-ÿ0-9]+)*$/.test(part)) {
         wordNo++;
         const active = wordNo === activeWordIndex ? ' active' : '';
-        // Orange CEFR tier wins over the purple high-frequency tier.
-        let tier = '', levelAttr = '';
+        // Precedence: reduction (teal) → CEFR B1–C2 (orange) → high-freq (purple).
+        let tier = '', extraAttr = '';
         if (state.highlightHF) {
-          if (isAdvancedWord(part)) { tier = ' cefr'; const lv = cefrLevelOf(part); if (lv) levelAttr = ` data-level="${lv}"`; }
+          const redKey = reductionKey(part);
+          if (redKey) { tier = ' reduction'; extraAttr = ` data-reduction="${escapeHtml(redKey)}"`; }
+          else if (isAdvancedWord(part)) { tier = ' cefr'; const lv = cefrLevelOf(part); if (lv) extraAttr = ` data-level="${lv}"`; }
           else if (isHighFreqWord(part)) tier = ' hf';
         }
-        return `<span class="word${active}${tier}" data-word="${escapeHtml(part)}"${levelAttr}>${escapeHtml(part)}</span>`;
+        return `<span class="word${active}${tier}" data-word="${escapeHtml(part)}"${extraAttr}>${escapeHtml(part)}</span>`;
       }
       return escapeHtml(part);
     }).join('');
@@ -2778,6 +2832,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       ? `Showing ${start+1}-${end} of ${state.subtitles.length}`
         + (state.highlightHF && state.hfCount ? ` · 🟣 ${state.hfCount} key` : '')
         + (state.highlightHF && state.advCount ? ` · 🟠 ${state.advCount} B1–C2` : '')
+        + (state.highlightHF && state.redCount ? ` · 🟢 ${state.redCount} reductions` : '')
       : 'Upload SRT to start';
     const chunks = [];
     if (start > 0) chunks.push(`<button class="small-btn" data-render-center="${Math.max(0,start-state.renderRadius)}">Load previous</button>`);
@@ -3517,6 +3572,19 @@ Return JSON ONLY:
     $('dictTranslation').textContent = 'Searching…';
     $('dictContext').innerHTML = idx >= 0 && item ? wordHtml(item.en, -1) : '';
 
+    // Instant offline data from the bundled vocabulary: CEFR level + POS badge
+    // and the curated Arabic meaning (shown immediately, before any network).
+    initLocalVocab();
+    const meta = (state.meanings && state.meanings[term.toLowerCase()]) || null;
+    const lvl = (meta && meta.level) || cefrLevelOf(term) || (state.cefrLevels && state.cefrLevels[term.toLowerCase()]) || '';
+    if ($('dictMeta')) {
+      const chips = [];
+      if (lvl) chips.push(`<span class="cefr-badge lvl-${lvl}">${lvl}</span>`);
+      if (meta && meta.pos) chips.push(`<span class="pos-badge">${escapeHtml(meta.pos)}</span>`);
+      $('dictMeta').innerHTML = chips.join(' ');
+    }
+    if (meta && meta.ar) $('dictTranslation').textContent = meta.ar;   // instant curated meaning
+
     // Phrase chips: when a SINGLE word was clicked, surface the compound
     // phrases in the line so the user can open the full phrasal-verb card.
     if ($('dictPhrases')) {
@@ -3538,9 +3606,12 @@ Return JSON ONLY:
       examples: state.currentDictExamples || []
     });
 
-    // Translation — Egyptian Puter first, MyMemory fallback.
-    try { $('dictTranslation').textContent = await translateTermPreferred(term, contextEn); }
-    catch { $('dictTranslation').textContent = 'Translation failed'; }
+    // Translation — use the curated offline meaning if we have one; otherwise
+    // Egyptian Puter first, MyMemory fallback.
+    if (!(meta && meta.ar)) {
+      try { $('dictTranslation').textContent = await translateTermPreferred(term, contextEn); }
+      catch { $('dictTranslation').textContent = 'Translation failed'; }
+    }
 
     // Examples — 5 from Puter AI (Egyptian), fallback to dictionary API + MyMemory.
     $('dictExamples').innerHTML = '<div class="example">✨ Puter AI is writing 5 Egyptian examples…</div>';
@@ -4731,6 +4802,56 @@ Return JSON ONLY, no extra text, in exactly this shape:
     renderSpeakCoach();
   }
 
+  // ───────── Connected speech (reductions) reference ─────────
+
+  function reductionCardHtml(r) {
+    return `<div class="red-card">
+      <div class="red-top">
+        <div class="red-forms">
+          <span class="red-full" dir="ltr">${escapeHtml(r.full)}</span>
+          <span class="red-arrow">→</span>
+          <span class="red-connected" dir="ltr">${escapeHtml(r.connected)}</span>
+          <button class="ex-speak" data-speak-ex="${escapeHtml(r.connected.replace(/\/.*$/, '').trim())}" title="Speak">🔊</button>
+        </div>
+      </div>
+      <div class="red-pron"><span dir="ltr">🅴 ${escapeHtml(r.eng || '')}</span>${r.ar ? `<span dir="rtl">🅰 ${escapeHtml(r.ar)}</span>` : ''}</div>
+      ${r.example ? `<div class="red-ex" dir="ltr">“${escapeHtml(r.example)}” <button class="ex-speak" data-speak-ex="${escapeHtml(r.example)}" title="Speak">🔊</button></div>` : ''}
+      ${r.meaning ? `<div class="red-mean" dir="rtl">${escapeHtml(r.meaning)}</div>` : ''}
+    </div>`;
+  }
+
+  function showReduction(key) {
+    initLocalVocab();
+    const r = state.reductionByForm && state.reductionByForm.get(String(key || '').toLowerCase());
+    if (!r) { showConnectedSpeech(); return; }
+    $('reductionBody').innerHTML = `${reductionCardHtml(r)}
+      <p class="hint-small" style="margin-top:10px">This is a fast-speech reduction — natives say it this way in casual conversation.</p>
+      <button class="full-btn" data-open-connected>📚 See all connected-speech forms</button>`;
+    openModal('reductionModal');
+    speak(r.connected.replace(/\/.*$/, '').trim());
+  }
+
+  function showConnectedSpeech() {
+    initLocalVocab();
+    openMenu(false);
+    const reds = state.reductions || [];
+    const patterns = state.reductionPatterns || [];
+    if (!reds.length) { $('reductionBody').innerHTML = '<p>Connected-speech data not loaded.</p>'; openModal('reductionModal'); return; }
+
+    // Group reductions by their source group.
+    const groups = {};
+    for (const r of reds) { (groups[r.group] = groups[r.group] || []).push(r); }
+
+    const patternsHtml = patterns.length ? `<details class="red-group" open><summary>📐 Patterns / القواعد</summary>${patterns.map(p => `<div class="red-pattern"><b dir="ltr">${escapeHtml(p.rule)}</b>${p.ar ? `<p dir="rtl">${escapeHtml(p.ar)}</p>` : ''}${p.ex ? `<p class="red-pattern-ex" dir="ltr">${escapeHtml(p.ex)}</p>` : ''}</div>`).join('')}</details>` : '';
+
+    const groupsHtml = Object.entries(groups).map(([g, list]) =>
+      `<details class="red-group"><summary>${escapeHtml(g)} <span class="red-count">${list.length}</span></summary>${list.map(reductionCardHtml).join('')}</details>`
+    ).join('');
+
+    $('reductionBody').innerHTML = `<p class="hint-small">Why fast English is hard to catch: these are the words that get “swallowed” in natural speech. Tap 🔊 to hear each one.</p>${patternsHtml}${groupsHtml}`;
+    openModal('reductionModal');
+  }
+
   function openMenu(show=true) { el.menuSheet.classList.toggle('hidden', !show); }
   function openModal(id) { $(id).classList.remove('hidden'); }
   function closeModal(id) {
@@ -4831,7 +4952,7 @@ Return JSON ONLY, no extra text, in exactly this shape:
   }
 
   document.addEventListener('click', e => {
-    const wordEl = e.target.closest('.word'); if (wordEl) { e.stopPropagation(); pauseMedia(); openDict(wordEl.dataset.word, Number(e.target.closest('[data-index]')?.dataset.index ?? state.lastIndex)); return; }
+    const wordEl = e.target.closest('.word'); if (wordEl) { e.stopPropagation(); pauseMedia(); if (wordEl.dataset.reduction) { showReduction(wordEl.dataset.reduction); } else { openDict(wordEl.dataset.word, Number(e.target.closest('[data-index]')?.dataset.index ?? state.lastIndex)); } return; }
     const renderBtn = e.target.closest('[data-render-center]'); if (renderBtn) return renderList(Number(renderBtn.dataset.renderCenter));
     const play = e.target.closest('[data-play]'); if (play) { const i = Number(play.dataset.play); state.repeatStart = -1; state.repeatEnd = -1; state.activeIndex = i; state.lastIndex = i; renderList(i); updateDock(state.subtitles[i], -1); seekMedia(state.subtitles[i].startTime, true); return; }
     const rep = e.target.closest('[data-repeat]'); if (rep) {
