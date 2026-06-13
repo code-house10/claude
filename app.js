@@ -50,7 +50,9 @@
     hfWords: null,     // Set of high-frequency words (top 3000 minus A1 stopwords)
     hfCount: 0,        // distinct high-frequency (purple) words in the current file
     cefrAdv: null,     // { word: 'B1'|'B2'|'C1'|'C2' } — advanced CEFR words
-    advCount: 0        // distinct advanced (orange) words in the current file
+    advCount: 0,       // distinct advanced (orange) words in the current file
+    savedWordSet: null,// Set of stems for already-saved words/phrases
+    savedCount: 0      // distinct already-saved words in the current file (pink)
   };
 
   const el = {
@@ -371,15 +373,52 @@
     return heuristicAdvanced(t);                           // offline fallback
   }
 
+  // ───────── Already-saved tier (pink) ─────────
+  // Rebuilds a Set of stems for every word/phrase the user has saved so each
+  // recurrence (or derived form: recommend → recommendation) lights up as
+  // pink in subtitles. Templates are excluded — they're patterns, not lemmas.
+  function rebuildSavedWordSet() {
+    const set = new Set();
+    for (const w of (state.savedWords || [])) {
+      if (!w?.word || w.kind === 'template') continue;
+      const norm = String(w.word).toLowerCase().trim();
+      if (!norm) continue;
+      // Collect every constituent token (handles single words AND phrases),
+      // then expand each with stem + derivational forms so inflected hits match.
+      const tokens = norm.match(/[a-z0-9']+/g) || [];
+      for (const t of tokens) {
+        if (t.length < 2) continue;
+        set.add(t);
+        set.add(baseVerb(t));
+        for (const s of derivationalStems(t)) set.add(s);
+      }
+    }
+    state.savedWordSet = set;
+  }
+
+  function isSavedWord(token) {
+    if (!state.savedWordSet || !state.savedWordSet.size) return false;
+    const t = String(token || '').toLowerCase();
+    if (t.length < 2 || A1_STOPWORDS.has(t)) return false;
+    if (state.savedWordSet.has(t)) return true;
+    for (const s of derivationalStems(t)) if (state.savedWordSet.has(s)) return true;
+    return false;
+  }
+
   // Count distinct highlighted words across the loaded subtitles (for the badge).
   // Mirrors wordHtml's precedence: a word is counted as advanced OR plain-HF,
   // never both.
   function recomputeHfCount() {
-    if ((!state.hfWords) || !state.highlightHF) { state.hfCount = 0; state.advCount = 0; state.redCount = 0; return; }
-    const hf = new Set(), adv = new Set(), red = new Set();
+    state.hfCount = 0; state.advCount = 0; state.redCount = 0; state.savedCount = 0;
+    if (!state.subtitles?.length) return;
+    const hf = new Set(), adv = new Set(), red = new Set(), sav = new Set();
     for (const item of state.subtitles) {
       for (const tok of tokenize(item.en)) {
         const t = tok.toLowerCase();
+        // Saved words are counted independently of the HF toggle — they're
+        // always relevant to the user. The other tiers respect highlightHF.
+        if (isSavedWord(t)) { sav.add(baseVerb(t)); continue; }
+        if (!state.highlightHF || !state.hfWords) continue;
         const rk = reductionKey(t);
         if (rk) red.add(rk);
         else if (isAdvancedWord(t)) adv.add(t);
@@ -389,6 +428,7 @@
     state.hfCount = hf.size;
     state.advCount = adv.size;
     state.redCount = red.size;
+    state.savedCount = sav.size;
   }
 
   // Load both lists, then refresh the UI so highlights + the badge appear.
@@ -2194,6 +2234,8 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       .map(normalizeSavedWord)
       .filter(x => x.word && !isHiddenCloudSettingsItem(x));
     writeJSON('jm_saved_words', state.savedWords);
+    if (typeof rebuildSavedWordSet === 'function') rebuildSavedWordSet();
+    if (state.subtitles?.length) { recomputeHfCount(); renderList(state.listCenter); updateDock(null); }
     debounceSave();
   }
 
@@ -2740,9 +2782,11 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       if (/^[A-Za-zÀ-ÿ0-9]+(?:[-'][A-Za-zÀ-ÿ0-9]+)*$/.test(part)) {
         wordNo++;
         const active = wordNo === activeWordIndex ? ' active' : '';
-        // Precedence: reduction (teal) → CEFR B1–C2 (orange) → high-freq (purple).
+        // Precedence: saved (pink, top — most personal) → reduction (teal) →
+        // CEFR B1–C2 (orange) → high-freq (purple).
         let tier = '', extraAttr = '';
-        if (state.highlightHF) {
+        if (isSavedWord(part)) tier = ' saved';
+        else if (state.highlightHF) {
           const redKey = reductionKey(part);
           if (redKey) { tier = ' reduction'; extraAttr = ` data-reduction="${escapeHtml(redKey)}"`; }
           else if (isAdvancedWord(part)) { tier = ' cefr'; const lv = cefrLevelOf(part); if (lv) extraAttr = ` data-level="${lv}"`; }
@@ -2830,6 +2874,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     const end = Math.min(state.subtitles.length, state.listCenter + state.renderRadius + 1);
     el.listInfo.textContent = state.subtitles.length
       ? `Showing ${start+1}-${end} of ${state.subtitles.length}`
+        + (state.savedCount ? ` · 🌸 ${state.savedCount} saved` : '')
         + (state.highlightHF && state.hfCount ? ` · 🟣 ${state.hfCount} key` : '')
         + (state.highlightHF && state.advCount ? ` · 🟠 ${state.advCount} B1–C2` : '')
         + (state.highlightHF && state.redCount ? ` · 🟢 ${state.redCount} reductions` : '')
@@ -3378,6 +3423,8 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       toast(normalizedPayload.kind === 'template' ? 'Template saved' : (normalizedPayload.kind === 'phrase' ? 'Phrase saved' : 'Word saved'));
     }
     writeJSON('jm_saved_words', state.savedWords.map(normalizeSavedWord));
+    rebuildSavedWordSet();
+    if (state.subtitles?.length) { recomputeHfCount(); renderList(state.listCenter); updateDock(null); }
     debounceSave();
     scheduleCloudLibrarySync();
   }
@@ -4528,24 +4575,51 @@ MEASUREMENTS:
 - Recognition confidence: ${Math.round((confidence || 0) * 100)}%
 ${mode === 'echo' ? `- Target line to repeat: "${target}"\n- Word accuracy vs target: ${Math.round((accuracy || 0) * 100)}%\n- Words likely stumbled: ${missedWords && missedWords.length ? missedWords.join(', ') : 'none'}` : ''}`;
 
-    const task = mode === 'echo'
-      ? `TASK: The learner was trying to REPEAT the target line exactly (shadowing).
-Judge how close they got, point out the specific words they likely mispronounced or dropped, and give one concrete pronunciation tip.`
-      : `TASK: The learner was REPLYING to the scene in their own words.
-Judge whether their reply is a natural, sensible response that conveys an appropriate meaning. It does NOT need to match the original line.`;
+    if (mode === 'echo') {
+      return `${common}
 
-    return `${common}
-
-${task}
+TASK: The learner was trying to REPEAT the target line exactly (shadowing).
+Judge how close they got, point out the specific words they likely mispronounced or dropped, and give one concrete pronunciation tip.
 
 Return JSON ONLY, no extra text, in exactly this shape:
 {
   "score": <integer 0-100 overall>,
-  "meaning": "<one short English sentence: ${mode === 'echo' ? 'how accurate the repetition was' : 'whether the reply fits and what it conveys'}>",
+  "meaning": "<one short English sentence: how accurate the repetition was>",
   "pronunciation": "<one short English sentence about likely pronunciation issues, naming specific words if any>",
   "fluency": "<one short English sentence about pace and naturalness>",
   "better": "<one improved, natural English sentence the learner could say next time>",
   "ar": "<جملة تشجيع ونصيحة قصيرة بالعربية المصرية الدارجة>"
+}`;
+    }
+
+    // REPLY MODE — focused on grammar/word-choice CORRECTION so the learner
+    // sees exactly what to fix, with the natural replacement word/phrase and a
+    // short reason. Empty arrays are fine — only flag real issues.
+    return `${common}
+
+TASK: The learner was REPLYING to the scene in their OWN WORDS to convey a sensible meaning. Their reply does NOT need to match the original line.
+
+Be a strict but kind correction coach:
+1. Decide whether their reply makes sense as a response to the scene line (give "meaning_match" 0–100).
+2. List concrete CORRECTIONS — grammar mistakes, missing articles, wrong tenses, awkward phrasing. For each: the wrong span, the natural fix, and a one-line reason.
+3. List specific WORD CHOICES the learner used that have a more natural / idiomatic alternative — e.g. "very big" → "huge". Reason in one short line.
+4. Provide one polished version of their reply (corrected_version) preserving their meaning.
+
+Return JSON ONLY, no extra text, in exactly this shape:
+{
+  "score": <integer 0-100 overall communication score>,
+  "meaning_match": <integer 0-100: does the reply fit the scene meaning>,
+  "meaning": "<one short English sentence: what their reply conveys vs what fits the scene>",
+  "fluency": "<one short English sentence about pace and naturalness>",
+  "corrections": [
+    {"wrong": "<exact wrong span from learner's reply>", "right": "<natural fix>", "reason": "<short why>"}
+  ],
+  "word_choices": [
+    {"used": "<word the learner used>", "suggested": "<more natural word/phrase>", "why": "<short why>"}
+  ],
+  "corrected_version": "<the learner's reply rewritten correctly, keeping their meaning>",
+  "better": "<one alternative, even more natural way to say it>",
+  "ar": "<جملة تشجيع ونصيحة قصيرة بالعربية المصرية الدارجة، تذكر أهم خطأ لو فيه>"
 }`;
   }
 
@@ -4558,13 +4632,24 @@ Return JSON ONLY, no extra text, in exactly this shape:
         const response = await window.puter.ai.chat(prompt, { model, temperature: 0.3, max_tokens: 500 });
         const parsed = parseJsonLoose(puterResponseToText(response));
         if (parsed && typeof parsed === 'object') {
+          const cleanArr = (arr, keys) => Array.isArray(arr)
+            ? arr.map(x => {
+                const o = {};
+                for (const k of keys) o[k] = cleanLine(x?.[k] || '');
+                return o;
+              }).filter(o => Object.values(o).some(v => v))
+            : [];
           return {
             score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
+            meaning_match: Number.isFinite(parsed.meaning_match) ? Math.max(0, Math.min(100, parsed.meaning_match)) : null,
             meaning: cleanLine(parsed.meaning || ''),
             pronunciation: cleanLine(parsed.pronunciation || ''),
             fluency: cleanLine(parsed.fluency || ''),
             better: cleanLine(parsed.better || ''),
-            ar: cleanLine(parsed.ar || '')
+            ar: cleanLine(parsed.ar || ''),
+            corrections: cleanArr(parsed.corrections, ['wrong', 'right', 'reason']),
+            word_choices: cleanArr(parsed.word_choices, ['used', 'suggested', 'why']),
+            corrected_version: cleanLine(parsed.corrected_version || '')
           };
         }
       } catch (e) { lastError = e; console.warn('Puter speaking analysis failed with model', model, e); }
@@ -4683,8 +4768,37 @@ Return JSON ONLY, no extra text, in exactly this shape:
         <div class="score-num">${a.score}<small>/100</small></div>
       </div>` : '';
 
+    // Reply mode gets dedicated correction blocks: a meaning-fit chip, a
+    // wrong→right list, a word-choice list, and the corrected version of
+    // exactly what the learner said (with a 🔊 button).
+    const correctionsHtml = (s.mode === 'reply' && a && a.corrections?.length) ? `
+      <div class="an-card corrections"><b>✏️ Corrections</b>
+        ${a.corrections.map(c => `<div class="corr-row">
+          <div class="corr-line"><span class="corr-wrong" dir="ltr">${escapeHtml(c.wrong)}</span><span class="corr-arrow">→</span><span class="corr-right" dir="ltr">${escapeHtml(c.right)}</span>${c.right ? `<button class="ex-speak" data-speak-ex="${escapeHtml(c.right)}" title="Speak">🔊</button>` : ''}</div>
+          ${c.reason ? `<div class="corr-reason" dir="ltr">${escapeHtml(c.reason)}</div>` : ''}
+        </div>`).join('')}
+      </div>` : '';
+    const wordChoicesHtml = (s.mode === 'reply' && a && a.word_choices?.length) ? `
+      <div class="an-card wordchoices"><b>🎨 Word choices</b>
+        ${a.word_choices.map(w => `<div class="corr-row">
+          <div class="corr-line"><span class="corr-wrong" dir="ltr">${escapeHtml(w.used)}</span><span class="corr-arrow">→</span><span class="corr-right" dir="ltr">${escapeHtml(w.suggested)}</span>${w.suggested ? `<button class="ex-speak" data-speak-ex="${escapeHtml(w.suggested)}" title="Speak">🔊</button>` : ''}</div>
+          ${w.why ? `<div class="corr-reason" dir="ltr">${escapeHtml(w.why)}</div>` : ''}
+        </div>`).join('')}
+      </div>` : '';
+    const correctedVer = (s.mode === 'reply' && a && a.corrected_version) ? `
+      <div class="an-card corrected"><b>📝 Your reply, corrected</b>
+        <p dir="ltr">${escapeHtml(a.corrected_version)}</p>
+        <button class="small-btn speak-listen" data-speak-say="${escapeHtml(a.corrected_version)}">🔊</button>
+      </div>` : '';
+    const meaningMatch = (s.mode === 'reply' && a && typeof a.meaning_match === 'number') ? `
+      <div class="an-card mmatch"><b>🎯 Meaning fit</b><p dir="ltr">Your reply matches the scene meaning <b>${a.meaning_match}%</b>.</p></div>` : '';
+
     const cards = a ? `<div class="speak-analysis">
+      ${meaningMatch}
       ${a.meaning ? `<div class="an-card meaning"><b>🎯 Meaning</b><p dir="ltr">${escapeHtml(a.meaning)}</p></div>` : ''}
+      ${correctionsHtml}
+      ${wordChoicesHtml}
+      ${correctedVer}
       ${a.pronunciation ? `<div class="an-card pron"><b>🗣️ Pronunciation</b><p dir="ltr">${escapeHtml(a.pronunciation)}</p></div>` : ''}
       ${a.fluency ? `<div class="an-card flu"><b>🌊 Fluency</b><p dir="ltr">${escapeHtml(a.fluency)}</p></div>` : ''}
       ${a.better ? `<div class="an-card better"><b>✨ Try saying</b><p dir="ltr">${escapeHtml(a.better)}</p><button class="small-btn speak-listen" data-speak-say="${escapeHtml(a.better)}">🔊</button></div>` : ''}
@@ -5618,7 +5732,12 @@ Return JSON ONLY in this exact shape:
 
   state.savedWords = state.savedWords.map(normalizeSavedWord).filter(x => x.word && !isHiddenCloudSettingsItem(x));
   state.savedLines = state.savedLines.map(normalizeSavedLine);
-  loadSavedItemsFromCloud({ silent: true, merge: true }).then(ok => { if (ok) setStatus(`Saved items ready from cloud • ${state.savedWords.length + state.savedLines.length} cards`); });
+  rebuildSavedWordSet();
+  loadSavedItemsFromCloud({ silent: true, merge: true }).then(ok => {
+    rebuildSavedWordSet();
+    if (state.subtitles?.length) { recomputeHfCount(); renderList(state.listCenter); updateDock(null); }
+    if (ok) setStatus(`Saved items ready from cloud • ${state.savedWords.length + state.savedLines.length} cards`);
+  });
   const savedSubs = readJSON('jm_subtitles', []);
   const savedUrl = localStorage.getItem('jm_video_url') || '';
   if (savedSubs.length) {

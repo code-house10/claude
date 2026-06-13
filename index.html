@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Jungle Movie Lite - OpenRouter AI</title>
-  <link rel="stylesheet" href="./style.css?v=dialogue-style-v11" />
+  <link rel="stylesheet" href="./style.css?v=saved-corrections-v12" />
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -185,7 +185,7 @@
           <button id="autoPauseBtn">Off</button>
         </div>
         <div class="control-row">
-          <span>Highlight key words<br><small style="font-weight:600;color:#94a3b8">🟣 Top-3000 key · 🟠 B1–C2 to learn</small></span>
+          <span>Highlight key words<br><small style="font-weight:600;color:#94a3b8">🌸 Saved · 🟢 Reductions · 🟠 B1–C2 · 🟣 Top-3000</small></span>
           <button id="highlightHfBtn">On</button>
         </div>
       </div>
@@ -282,11 +282,11 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="https://js.puter.com/v2/"></script>
-  <script src="./vocab-data.js?v=dialogue-style-v11"></script>
-  <script src="./app.js?v=dialogue-style-v11"></script>
+  <script src="./vocab-data.js?v=saved-corrections-v12"></script>
+  <script src="./app.js?v=saved-corrections-v12"></script>
   <script>
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=dialogue-style-v11').then(r => r.update()).catch(() => {}));
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=saved-corrections-v12').then(r => r.update()).catch(() => {}));
     }
   </script>
 </body>
