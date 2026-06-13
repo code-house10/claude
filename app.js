@@ -3415,15 +3415,30 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   // repeats are instant and don't burn network.
   // ════════════════════════════════════════════════════════════════
 
+  // Voice catalogue is split by ENGINE because Puter (AWS Polly) and Inworld
+  // expose different voice names. The picker iterates only voices belonging to
+  // the currently selected engine — switching engine snaps to the engine's first
+  // voice automatically.
   const TTS_VOICE_OPTIONS = [
-    { id: 'Joanna',  label: '🇺🇸 Joanna (F)',  lang: 'en-US' },
-    { id: 'Matthew', label: '🇺🇸 Matthew (M)', lang: 'en-US' },
-    { id: 'Salli',   label: '🇺🇸 Salli (F)',   lang: 'en-US' },
-    { id: 'Joey',    label: '🇺🇸 Joey (M)',    lang: 'en-US' },
-    { id: 'Amy',     label: '🇬🇧 Amy (F)',     lang: 'en-GB' },
-    { id: 'Brian',   label: '🇬🇧 Brian (M)',   lang: 'en-GB' }
+    // Inworld (premium-natural, server proxy)
+    { id: 'Clive',   label: '🎙️ Clive (M, UK)',   lang: 'en-GB', engine: 'inworld' },
+    { id: 'Ashley',  label: '🎙️ Ashley (F, US)',  lang: 'en-US', engine: 'inworld' },
+    { id: 'Edward',  label: '🎙️ Edward (M, US)',  lang: 'en-US', engine: 'inworld' },
+    { id: 'Olivia',  label: '🎙️ Olivia (F, UK)',  lang: 'en-GB', engine: 'inworld' },
+    // Puter (Polly neural, free in-browser SDK)
+    { id: 'Joanna',  label: '🇺🇸 Joanna (F)',     lang: 'en-US', engine: 'puter' },
+    { id: 'Matthew', label: '🇺🇸 Matthew (M)',    lang: 'en-US', engine: 'puter' },
+    { id: 'Salli',   label: '🇺🇸 Salli (F)',      lang: 'en-US', engine: 'puter' },
+    { id: 'Joey',    label: '🇺🇸 Joey (M)',       lang: 'en-US', engine: 'puter' },
+    { id: 'Amy',     label: '🇬🇧 Amy (F)',        lang: 'en-GB', engine: 'puter' },
+    { id: 'Brian',   label: '🇬🇧 Brian (M)',      lang: 'en-GB', engine: 'puter' }
   ];
-  const TTS_ENGINES = ['neural', 'generative', 'standard'];
+  // Engines available for the user to pick. Inworld is the highest quality
+  // (server proxy with API key), Puter is a free in-browser cloud voice,
+  // browser is the offline OS voice.
+  const TTS_PROVIDERS = ['inworld', 'puter', 'browser'];
+  const TTS_INWORLD_DELIVERY = 'BALANCED';
+  const TTS_INWORLD_MODEL = 'inworld-tts-2';
   const TTS_CACHE = new Map();   // key → HTMLAudioElement
   const TTS_CACHE_LIMIT = 60;
   let currentTtsAudio = null;
@@ -3431,10 +3446,17 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   function getTtsSettings() {
     let raw;
     try { raw = JSON.parse(localStorage.getItem('jm_tts_settings') || '{}'); } catch { raw = {}; }
+    const provider = TTS_PROVIDERS.includes(raw.provider)
+      ? raw.provider
+      : (raw.usePuter === false ? 'browser' : 'inworld');   // default Inworld, honour legacy usePuter
+    // Pick a voice that belongs to the chosen provider; fall back to the first one.
+    const enginePool = TTS_VOICE_OPTIONS.filter(v => v.engine === provider);
+    const wantedVoice = raw.voice && enginePool.some(v => v.id === raw.voice)
+      ? raw.voice
+      : (enginePool[0]?.id || 'Clive');
     return {
-      usePuter: raw.usePuter !== false,                                  // default ON
-      voice: TTS_VOICE_OPTIONS.find(v => v.id === raw.voice) ? raw.voice : 'Joanna',
-      engine: TTS_ENGINES.includes(raw.engine) ? raw.engine : 'neural',
+      provider,
+      voice: wantedVoice,
       rate: Number(raw.rate || 1)
     };
   }
@@ -3463,32 +3485,65 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     } catch (e) { console.warn('Browser TTS failed:', e); }
   }
 
+  // Fetch + base64-MP3 → <audio> for Inworld (via our /api/inworld-tts proxy).
+  async function ttsViaInworld(text, voice) {
+    const res = await fetch('/api/inworld-tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        voice: voice.id,
+        model: TTS_INWORLD_MODEL,
+        speakingRate: 1,
+        deliveryMode: TTS_INWORLD_DELIVERY,
+        language: voice.lang || 'AUTO'
+      })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(`Inworld ${res.status}: ${data.error || res.statusText}`);
+    }
+    const data = await res.json();
+    if (!data.audioContent) throw new Error('Inworld returned no audio');
+    const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`);
+    // Preload so .play() starts immediately on user gesture.
+    audio.preload = 'auto';
+    return audio;
+  }
+
+  async function ttsViaPuter(text, voice) {
+    if (!window.puter?.ai?.txt2speech) throw new Error('Puter TTS unavailable');
+    const audio = await window.puter.ai.txt2speech(text, {
+      language: voice.lang,
+      voice: voice.id,
+      engine: 'neural'
+    });
+    if (!audio) throw new Error('Puter TTS returned no audio');
+    return audio;
+  }
+
   async function speakNatural(text, opts = {}) {
     text = String(text || '').trim();
     if (!text) return;
     const cfg = getTtsSettings();
     cancelTts();
 
-    // Browser-only path
-    if (!cfg.usePuter || !window.puter?.ai?.txt2speech) {
+    if (cfg.provider === 'browser') {
       return speakBrowserFallback(text, opts);
     }
 
+    const voice = TTS_VOICE_OPTIONS.find(v => v.id === cfg.voice && v.engine === cfg.provider)
+      || TTS_VOICE_OPTIONS.find(v => v.engine === cfg.provider)
+      || TTS_VOICE_OPTIONS[0];
+
     try {
-      const voice = TTS_VOICE_OPTIONS.find(v => v.id === cfg.voice) || TTS_VOICE_OPTIONS[0];
-      const key = `${voice.id}::${cfg.engine}::${text}`;
+      const safeText = text.length > 2500 ? text.slice(0, 2500) : text;
+      const key = `${cfg.provider}::${voice.id}::${safeText}`;
       let audio = TTS_CACHE.get(key);
       if (!audio) {
-        // Polly hard-limits text length per call; chunk extremely long inputs.
-        // For typical subtitle lines this is a no-op.
-        const safeText = text.length > 2500 ? text.slice(0, 2500) : text;
-        audio = await window.puter.ai.txt2speech(safeText, {
-          language: voice.lang,
-          voice: voice.id,
-          engine: cfg.engine
-        });
-        if (!audio) throw new Error('Puter TTS returned no audio');
-        // LRU eviction: drop oldest when over the limit
+        audio = cfg.provider === 'inworld'
+          ? await ttsViaInworld(safeText, voice)
+          : await ttsViaPuter(safeText, voice);
         TTS_CACHE.set(key, audio);
         if (TTS_CACHE.size > TTS_CACHE_LIMIT) {
           const oldest = TTS_CACHE.keys().next().value;
@@ -3509,7 +3564,19 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       };
       await audio.play();
     } catch (e) {
-      console.warn('Puter TTS failed, falling back to browser:', e);
+      console.warn(`${cfg.provider} TTS failed, falling back to browser:`, e);
+      // Soft-cascade: tried Inworld → try Puter → finally browser.
+      if (cfg.provider === 'inworld' && window.puter?.ai?.txt2speech) {
+        const fb = TTS_VOICE_OPTIONS.find(v => v.engine === 'puter') || TTS_VOICE_OPTIONS[0];
+        try {
+          const audio = await ttsViaPuter(text, fb);
+          audio.playbackRate = cfg.rate || 1;
+          currentTtsAudio = audio;
+          audio.onended = () => { if (currentTtsAudio === audio) currentTtsAudio = null; if (opts.onended) opts.onended(); };
+          await audio.play();
+          return;
+        } catch (e2) { console.warn('Puter fallback failed too:', e2); }
+      }
       speakBrowserFallback(text, opts);
     }
   }
@@ -5444,8 +5511,14 @@ Return JSON ONLY in this exact shape:
     if (el.repeatDelayValue) el.repeatDelayValue.textContent = `${state.repeatDelaySeconds}s`;
     const hb = $('highlightHfBtn'); if (hb) hb.textContent = state.highlightHF ? 'On' : 'Off';
     const tts = (typeof getTtsSettings === 'function') ? getTtsSettings() : null;
-    const eb = $('ttsEngineBtn'); if (eb && tts) eb.textContent = tts.usePuter ? 'On' : 'Off';
-    const vb = $('ttsVoiceBtn'); if (vb && tts) { const v = TTS_VOICE_OPTIONS.find(x => x.id === tts.voice) || TTS_VOICE_OPTIONS[0]; vb.textContent = v.label.replace(/ \([FM]\)$/, ''); }
+    const eb = $('ttsEngineBtn');
+    if (eb && tts) eb.textContent = tts.provider === 'inworld' ? '🎙️ Inworld' : (tts.provider === 'puter' ? '🤖 Puter' : '💻 Browser');
+    const vb = $('ttsVoiceBtn');
+    if (vb && tts) {
+      const v = TTS_VOICE_OPTIONS.find(x => x.id === tts.voice && x.engine === tts.provider) || TTS_VOICE_OPTIONS.find(x => x.engine === tts.provider) || TTS_VOICE_OPTIONS[0];
+      vb.textContent = tts.provider === 'browser' ? '— OS default' : v.label.replace(/ \([FM][^)]*\)$/, '');
+      vb.disabled = tts.provider === 'browser';
+    }
   }
 
   async function loadUrl(url, opts = {}) {
@@ -5760,23 +5833,33 @@ Return JSON ONLY in this exact shape:
     toast(state.highlightHF ? 'Key-word highlighting on' : 'Highlighting off');
   };
   if ($('ttsEngineBtn')) $('ttsEngineBtn').onclick = () => {
-    const cur = getTtsSettings(); setTtsSettings({ usePuter: !cur.usePuter });
-    TTS_CACHE.clear();   // stale cached audio uses the old engine setting
+    const cur = getTtsSettings();
+    const next = TTS_PROVIDERS[(TTS_PROVIDERS.indexOf(cur.provider) + 1) % TTS_PROVIDERS.length];
+    // Snap voice to the first one that belongs to the new engine.
+    const firstVoice = TTS_VOICE_OPTIONS.find(v => v.engine === next);
+    setTtsSettings({ provider: next, voice: firstVoice ? firstVoice.id : cur.voice });
+    TTS_CACHE.clear();
     updateControls();
-    toast(cur.usePuter ? 'Browser voice (offline)' : 'Natural voice (Puter)');
+    const label = next === 'inworld' ? 'Inworld (premium)' : (next === 'puter' ? 'Puter (free cloud)' : 'Browser (offline)');
+    toast(`Voice engine: ${label}`);
+    if (next !== 'browser' && firstVoice) speakNatural(`Hi, I'm ${firstVoice.id}.`);
   };
   if ($('ttsVoiceBtn')) $('ttsVoiceBtn').onclick = () => {
     const cur = getTtsSettings();
-    const idx = TTS_VOICE_OPTIONS.findIndex(v => v.id === cur.voice);
-    const next = TTS_VOICE_OPTIONS[(idx + 1) % TTS_VOICE_OPTIONS.length];
+    if (cur.provider === 'browser') { toast('Browser voice uses the OS default'); return; }
+    const pool = TTS_VOICE_OPTIONS.filter(v => v.engine === cur.provider);
+    if (!pool.length) return;
+    const idx = pool.findIndex(v => v.id === cur.voice);
+    const next = pool[(idx + 1) % pool.length];
     setTtsSettings({ voice: next.id });
-    TTS_CACHE.clear();   // each voice has its own audio
+    TTS_CACHE.clear();
     updateControls();
     speakNatural(`Hi, I'm ${next.id}. Let's practice English together.`);
   };
   if ($('ttsVoiceTestBtn')) $('ttsVoiceTestBtn').onclick = () => {
-    const v = getTtsSettings().voice;
-    speakNatural(`Hello, this is ${v}. Pick a subtitle and start practicing.`);
+    const cfg = getTtsSettings();
+    const tag = cfg.provider === 'browser' ? 'your browser voice' : cfg.voice;
+    speakNatural(`Hello, this is ${tag}. Pick a subtitle and start practicing.`);
   };
   $('goActiveBtn').onclick = () => jumpToCard(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0);
   el.subtitleDock.onclick = () => jumpToCard(currentSubtitleIndex());

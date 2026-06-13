@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Jungle Movie Lite - OpenRouter AI</title>
-  <link rel="stylesheet" href="./style.css?v=natural-tts-v13" />
+  <link rel="stylesheet" href="./style.css?v=inworld-tts-v14" />
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -189,13 +189,13 @@
           <button id="highlightHfBtn">On</button>
         </div>
         <div class="control-row">
-          <span>Natural voice (Puter)<br><small style="font-weight:600;color:#94a3b8">Cloud neural TTS, falls back to browser</small></span>
-          <button id="ttsEngineBtn">On</button>
+          <span>TTS engine<br><small style="font-weight:600;color:#94a3b8">Inworld = premium · Puter = free cloud · Browser = offline</small></span>
+          <button id="ttsEngineBtn">Inworld</button>
         </div>
         <div class="control-row">
-          <span>Voice<br><small style="font-weight:600;color:#94a3b8">Tap to cycle voice · 🔊 to preview</small></span>
+          <span>Voice<br><small style="font-weight:600;color:#94a3b8">Tap to cycle · 🔊 to preview</small></span>
           <div class="sync-controls">
-            <button id="ttsVoiceBtn">🇺🇸 Joanna</button>
+            <button id="ttsVoiceBtn">🎙️ Clive</button>
             <button id="ttsVoiceTestBtn" title="Preview voice">🔊</button>
           </div>
         </div>
@@ -293,11 +293,11 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="https://js.puter.com/v2/"></script>
-  <script src="./vocab-data.js?v=natural-tts-v13"></script>
-  <script src="./app.js?v=natural-tts-v13"></script>
+  <script src="./vocab-data.js?v=inworld-tts-v14"></script>
+  <script src="./app.js?v=inworld-tts-v14"></script>
   <script>
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=natural-tts-v13').then(r => r.update()).catch(() => {}));
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=inworld-tts-v14').then(r => r.update()).catch(() => {}));
     }
   </script>
 </body>

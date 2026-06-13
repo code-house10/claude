@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-natural-tts-v13';
-const ASSETS = ['./', './index.html', './style.css?v=natural-tts-v13', './app.js?v=natural-tts-v13', './vocab-data.js?v=natural-tts-v13'];
+const CACHE_NAME = 'jungle-movie-inworld-tts-v14';
+const ASSETS = ['./', './index.html', './style.css?v=inworld-tts-v14', './app.js?v=inworld-tts-v14', './vocab-data.js?v=inworld-tts-v14'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
