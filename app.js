@@ -3425,6 +3425,18 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     { id: 'Ashley',  label: '🎙️ Ashley (F, US)',  lang: 'en-US', engine: 'inworld' },
     { id: 'Edward',  label: '🎙️ Edward (M, US)',  lang: 'en-US', engine: 'inworld' },
     { id: 'Olivia',  label: '🎙️ Olivia (F, UK)',  lang: 'en-GB', engine: 'inworld' },
+    // ElevenLabs (premium-natural, server proxy). voiceId values are official.
+    { id: '21m00Tcm4TlvDq8ikWAM', label: '🎤 Rachel (F, US)',  lang: 'en-US', engine: 'eleven' },
+    { id: 'pNInz6obpgDQGcFmaJgB', label: '🎤 Adam (M, US)',    lang: 'en-US', engine: 'eleven' },
+    { id: 'EXAVITQu4vr4xnSDxMaL', label: '🎤 Bella (F, US)',   lang: 'en-US', engine: 'eleven' },
+    { id: 'ErXwobaYiN019PkySvjV', label: '🎤 Antoni (M, US)',  lang: 'en-US', engine: 'eleven' },
+    { id: 'AZnzlk1XvdvUeBnXmlld', label: '🎤 Domi (F, US)',    lang: 'en-US', engine: 'eleven' },
+    // Groq PlayAI TTS (fast, free tier, server proxy)
+    { id: 'Fritz-PlayAI',    label: '⚡ Fritz (M)',   lang: 'en-US', engine: 'groq' },
+    { id: 'Quinn-PlayAI',    label: '⚡ Quinn (F)',   lang: 'en-US', engine: 'groq' },
+    { id: 'Mason-PlayAI',    label: '⚡ Mason (M)',   lang: 'en-US', engine: 'groq' },
+    { id: 'Aaliyah-PlayAI',  label: '⚡ Aaliyah (F)', lang: 'en-US', engine: 'groq' },
+    { id: 'Atlas-PlayAI',    label: '⚡ Atlas (M)',   lang: 'en-US', engine: 'groq' },
     // Puter (Polly neural, free in-browser SDK)
     { id: 'Joanna',  label: '🇺🇸 Joanna (F)',     lang: 'en-US', engine: 'puter' },
     { id: 'Matthew', label: '🇺🇸 Matthew (M)',    lang: 'en-US', engine: 'puter' },
@@ -3433,10 +3445,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     { id: 'Amy',     label: '🇬🇧 Amy (F)',        lang: 'en-GB', engine: 'puter' },
     { id: 'Brian',   label: '🇬🇧 Brian (M)',      lang: 'en-GB', engine: 'puter' }
   ];
-  // Engines available for the user to pick. Inworld is the highest quality
-  // (server proxy with API key), Puter is a free in-browser cloud voice,
-  // browser is the offline OS voice.
-  const TTS_PROVIDERS = ['inworld', 'puter', 'browser'];
+  // Engines available for the user to pick. Order also defines the fallback
+  // cascade when the chosen engine fails: inworld → eleven → groq → puter → browser.
+  const TTS_PROVIDERS = ['inworld', 'eleven', 'groq', 'puter', 'browser'];
   const TTS_INWORLD_DELIVERY = 'BALANCED';
   const TTS_INWORLD_MODEL = 'inworld-tts-2';
   const TTS_CACHE = new Map();   // key → HTMLAudioElement
@@ -3522,63 +3533,101 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     return audio;
   }
 
+  // Shared helper for server-proxy engines that return { audioContent, mimeType }.
+  async function ttsViaProxy(endpoint, payload, label) {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(`${label} ${res.status}: ${data.error || res.statusText}`);
+    }
+    const data = await res.json();
+    if (!data.audioContent) throw new Error(`${label} returned no audio`);
+    const mime = data.mimeType || 'audio/mpeg';
+    const audio = new Audio(`data:${mime};base64,${data.audioContent}`);
+    audio.preload = 'auto';
+    return audio;
+  }
+
+  async function ttsViaEleven(text, voice) {
+    return ttsViaProxy('/api/eleven-tts', { text, voice: voice.id }, 'ElevenLabs');
+  }
+
+  async function ttsViaGroq(text, voice) {
+    return ttsViaProxy('/api/groq-tts', { text, voice: voice.id }, 'Groq');
+  }
+
+  // Map provider name → fetcher. Each must return an HTMLAudioElement.
+  const TTS_FETCHERS = {
+    inworld: (t, v) => ttsViaInworld(t, v),
+    eleven:  (t, v) => ttsViaEleven(t, v),
+    groq:    (t, v) => ttsViaGroq(t, v),
+    puter:   (t, v) => ttsViaPuter(t, v)
+  };
+
+  // Pick a sensible voice for a given engine, preferring the user's last choice.
+  function defaultVoiceFor(engine, preferredId) {
+    if (preferredId) {
+      const m = TTS_VOICE_OPTIONS.find(v => v.id === preferredId && v.engine === engine);
+      if (m) return m;
+    }
+    return TTS_VOICE_OPTIONS.find(v => v.engine === engine);
+  }
+
+  async function playFromAudio(audio, rate, onended) {
+    audio.playbackRate = rate || 1;
+    currentTtsAudio = audio;
+    audio.onended = () => { if (currentTtsAudio === audio) currentTtsAudio = null; if (onended) onended(); };
+    audio.onerror = () => { if (currentTtsAudio === audio) currentTtsAudio = null; if (onended) onended(); };
+    await audio.play();
+  }
+
+  // Try one engine; on success return true, on failure throw to caller.
+  async function attemptEngine(engine, text, preferredId, cfg) {
+    if (engine === 'browser') { speakBrowserFallback(text, { onended: cfg.onended }); return true; }
+    if (engine === 'puter' && !window.puter?.ai?.txt2speech) throw new Error('Puter SDK not loaded');
+    const voice = defaultVoiceFor(engine, preferredId);
+    if (!voice) throw new Error(`No voice configured for ${engine}`);
+    const key = `${engine}::${voice.id}::${text}`;
+    let audio = TTS_CACHE.get(key);
+    if (!audio) {
+      audio = await TTS_FETCHERS[engine](text, voice);
+      TTS_CACHE.set(key, audio);
+      if (TTS_CACHE.size > TTS_CACHE_LIMIT) {
+        const oldest = TTS_CACHE.keys().next().value;
+        TTS_CACHE.delete(oldest);
+      }
+    } else {
+      try { audio.currentTime = 0; } catch {}
+    }
+    await playFromAudio(audio, cfg.rate, cfg.onended);
+    return true;
+  }
+
   async function speakNatural(text, opts = {}) {
     text = String(text || '').trim();
     if (!text) return;
     const cfg = getTtsSettings();
     cancelTts();
+    const safeText = text.length > 2500 ? text.slice(0, 2500) : text;
 
-    if (cfg.provider === 'browser') {
-      return speakBrowserFallback(text, opts);
-    }
+    // Build cascade: chosen provider first, then the rest of the priority list
+    // in the order defined by TTS_PROVIDERS, browser is always last.
+    const cascade = [cfg.provider, ...TTS_PROVIDERS.filter(p => p !== cfg.provider)];
 
-    const voice = TTS_VOICE_OPTIONS.find(v => v.id === cfg.voice && v.engine === cfg.provider)
-      || TTS_VOICE_OPTIONS.find(v => v.engine === cfg.provider)
-      || TTS_VOICE_OPTIONS[0];
-
-    try {
-      const safeText = text.length > 2500 ? text.slice(0, 2500) : text;
-      const key = `${cfg.provider}::${voice.id}::${safeText}`;
-      let audio = TTS_CACHE.get(key);
-      if (!audio) {
-        audio = cfg.provider === 'inworld'
-          ? await ttsViaInworld(safeText, voice)
-          : await ttsViaPuter(safeText, voice);
-        TTS_CACHE.set(key, audio);
-        if (TTS_CACHE.size > TTS_CACHE_LIMIT) {
-          const oldest = TTS_CACHE.keys().next().value;
-          TTS_CACHE.delete(oldest);
-        }
-      } else {
-        try { audio.currentTime = 0; } catch {}
+    for (const engine of cascade) {
+      try {
+        await attemptEngine(engine, safeText, cfg.voice, { rate: cfg.rate, onended: opts.onended });
+        return;
+      } catch (e) {
+        console.warn(`TTS engine "${engine}" failed, trying next:`, e?.message || e);
       }
-      audio.playbackRate = cfg.rate || 1;
-      currentTtsAudio = audio;
-      audio.onended = () => {
-        if (currentTtsAudio === audio) currentTtsAudio = null;
-        if (opts.onended) opts.onended();
-      };
-      audio.onerror = () => {
-        if (currentTtsAudio === audio) currentTtsAudio = null;
-        if (opts.onended) opts.onended();
-      };
-      await audio.play();
-    } catch (e) {
-      console.warn(`${cfg.provider} TTS failed, falling back to browser:`, e);
-      // Soft-cascade: tried Inworld → try Puter → finally browser.
-      if (cfg.provider === 'inworld' && window.puter?.ai?.txt2speech) {
-        const fb = TTS_VOICE_OPTIONS.find(v => v.engine === 'puter') || TTS_VOICE_OPTIONS[0];
-        try {
-          const audio = await ttsViaPuter(text, fb);
-          audio.playbackRate = cfg.rate || 1;
-          currentTtsAudio = audio;
-          audio.onended = () => { if (currentTtsAudio === audio) currentTtsAudio = null; if (opts.onended) opts.onended(); };
-          await audio.play();
-          return;
-        } catch (e2) { console.warn('Puter fallback failed too:', e2); }
-      }
-      speakBrowserFallback(text, opts);
     }
+    // Should be unreachable: browser is the last fallback and shouldn't throw.
+    console.error('All TTS engines failed for:', safeText);
   }
 
   // Legacy entry points — every old call site routes through here, so flipping
@@ -5512,7 +5561,10 @@ Return JSON ONLY in this exact shape:
     const hb = $('highlightHfBtn'); if (hb) hb.textContent = state.highlightHF ? 'On' : 'Off';
     const tts = (typeof getTtsSettings === 'function') ? getTtsSettings() : null;
     const eb = $('ttsEngineBtn');
-    if (eb && tts) eb.textContent = tts.provider === 'inworld' ? '🎙️ Inworld' : (tts.provider === 'puter' ? '🤖 Puter' : '💻 Browser');
+    if (eb && tts) {
+      const label = ({ inworld: '🎙️ Inworld', eleven: '🎤 ElevenLabs', groq: '⚡ Groq', puter: '🤖 Puter', browser: '💻 Browser' })[tts.provider] || tts.provider;
+      eb.textContent = label;
+    }
     const vb = $('ttsVoiceBtn');
     if (vb && tts) {
       const v = TTS_VOICE_OPTIONS.find(x => x.id === tts.voice && x.engine === tts.provider) || TTS_VOICE_OPTIONS.find(x => x.engine === tts.provider) || TTS_VOICE_OPTIONS[0];
@@ -5840,7 +5892,7 @@ Return JSON ONLY in this exact shape:
     setTtsSettings({ provider: next, voice: firstVoice ? firstVoice.id : cur.voice });
     TTS_CACHE.clear();
     updateControls();
-    const label = next === 'inworld' ? 'Inworld (premium)' : (next === 'puter' ? 'Puter (free cloud)' : 'Browser (offline)');
+    const label = ({ inworld: 'Inworld (premium)', eleven: 'ElevenLabs (premium)', groq: 'Groq (fast)', puter: 'Puter (free cloud)', browser: 'Browser (offline)' })[next] || next;
     toast(`Voice engine: ${label}`);
     if (next !== 'browser' && firstVoice) speakNatural(`Hi, I'm ${firstVoice.id}.`);
   };
