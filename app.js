@@ -3401,7 +3401,122 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     saveState(); setStatus('Azure translation finished'); toast('Translation finished');
   }
 
-  function speak(text) { try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang='en-US'; u.rate=.85; speechSynthesis.speak(u); } catch {} }
+  // ════════════════════════════════════════════════════════════════
+  // NATURAL TTS via Puter (AWS Polly under the hood, neural engine)
+  //
+  // Every existing call site — dock 🔊, dict, examples, smart cards, dialogue
+  // play-all, reductions, speaking coach — goes through speak()/speakText(),
+  // which both delegate to speakNatural() here. So flipping this on instantly
+  // upgrades the whole app to human-quality voices.
+  //
+  // Falls back to the browser SpeechSynthesis API silently if Puter TTS isn't
+  // available (offline, blocked, or the user disabled it). A small in-memory
+  // LRU cache keys returned <audio> elements by (voice, engine, text) so
+  // repeats are instant and don't burn network.
+  // ════════════════════════════════════════════════════════════════
+
+  const TTS_VOICE_OPTIONS = [
+    { id: 'Joanna',  label: '🇺🇸 Joanna (F)',  lang: 'en-US' },
+    { id: 'Matthew', label: '🇺🇸 Matthew (M)', lang: 'en-US' },
+    { id: 'Salli',   label: '🇺🇸 Salli (F)',   lang: 'en-US' },
+    { id: 'Joey',    label: '🇺🇸 Joey (M)',    lang: 'en-US' },
+    { id: 'Amy',     label: '🇬🇧 Amy (F)',     lang: 'en-GB' },
+    { id: 'Brian',   label: '🇬🇧 Brian (M)',   lang: 'en-GB' }
+  ];
+  const TTS_ENGINES = ['neural', 'generative', 'standard'];
+  const TTS_CACHE = new Map();   // key → HTMLAudioElement
+  const TTS_CACHE_LIMIT = 60;
+  let currentTtsAudio = null;
+
+  function getTtsSettings() {
+    let raw;
+    try { raw = JSON.parse(localStorage.getItem('jm_tts_settings') || '{}'); } catch { raw = {}; }
+    return {
+      usePuter: raw.usePuter !== false,                                  // default ON
+      voice: TTS_VOICE_OPTIONS.find(v => v.id === raw.voice) ? raw.voice : 'Joanna',
+      engine: TTS_ENGINES.includes(raw.engine) ? raw.engine : 'neural',
+      rate: Number(raw.rate || 1)
+    };
+  }
+  function setTtsSettings(patch) {
+    const next = { ...getTtsSettings(), ...patch };
+    localStorage.setItem('jm_tts_settings', JSON.stringify(next));
+    return next;
+  }
+
+  function cancelTts() {
+    try { if (currentTtsAudio) { currentTtsAudio.pause(); currentTtsAudio.currentTime = 0; } } catch {}
+    try { window.speechSynthesis?.cancel(); } catch {}
+    currentTtsAudio = null;
+  }
+
+  function speakBrowserFallback(text, opts = {}) {
+    if (!text || !window.speechSynthesis) return;
+    try {
+      const u = new SpeechSynthesisUtterance(String(text));
+      u.lang = opts.lang || 'en-US'; u.rate = opts.rate || 0.95; u.pitch = 1;
+      const voices = window.speechSynthesis.getVoices();
+      const v = voices.find(x => x.lang === u.lang) || voices.find(x => /^en/i.test(x.lang));
+      if (v) u.voice = v;
+      if (opts.onended) u.onend = opts.onended;
+      window.speechSynthesis.speak(u);
+    } catch (e) { console.warn('Browser TTS failed:', e); }
+  }
+
+  async function speakNatural(text, opts = {}) {
+    text = String(text || '').trim();
+    if (!text) return;
+    const cfg = getTtsSettings();
+    cancelTts();
+
+    // Browser-only path
+    if (!cfg.usePuter || !window.puter?.ai?.txt2speech) {
+      return speakBrowserFallback(text, opts);
+    }
+
+    try {
+      const voice = TTS_VOICE_OPTIONS.find(v => v.id === cfg.voice) || TTS_VOICE_OPTIONS[0];
+      const key = `${voice.id}::${cfg.engine}::${text}`;
+      let audio = TTS_CACHE.get(key);
+      if (!audio) {
+        // Polly hard-limits text length per call; chunk extremely long inputs.
+        // For typical subtitle lines this is a no-op.
+        const safeText = text.length > 2500 ? text.slice(0, 2500) : text;
+        audio = await window.puter.ai.txt2speech(safeText, {
+          language: voice.lang,
+          voice: voice.id,
+          engine: cfg.engine
+        });
+        if (!audio) throw new Error('Puter TTS returned no audio');
+        // LRU eviction: drop oldest when over the limit
+        TTS_CACHE.set(key, audio);
+        if (TTS_CACHE.size > TTS_CACHE_LIMIT) {
+          const oldest = TTS_CACHE.keys().next().value;
+          TTS_CACHE.delete(oldest);
+        }
+      } else {
+        try { audio.currentTime = 0; } catch {}
+      }
+      audio.playbackRate = cfg.rate || 1;
+      currentTtsAudio = audio;
+      audio.onended = () => {
+        if (currentTtsAudio === audio) currentTtsAudio = null;
+        if (opts.onended) opts.onended();
+      };
+      audio.onerror = () => {
+        if (currentTtsAudio === audio) currentTtsAudio = null;
+        if (opts.onended) opts.onended();
+      };
+      await audio.play();
+    } catch (e) {
+      console.warn('Puter TTS failed, falling back to browser:', e);
+      speakBrowserFallback(text, opts);
+    }
+  }
+
+  // Legacy entry points — every old call site routes through here, so flipping
+  // to natural voices is automatic. opts can pass { onended } for sequencing.
+  function speak(text, opts) { speakNatural(text, opts); }
   function saveWord(word, ar='', extra = {}) {
     word = String(word || '').trim();
     if (!word) return;
@@ -3808,6 +3923,12 @@ Return JSON ONLY:
   }
 
   function speakText(text, lang = 'en-US') {
+    // Delegates to the unified Puter-natural pipeline. The lang hint is
+    // implicit in the chosen voice (en-US / en-GB) — we ignore it here so
+    // the user's chosen voice always wins.
+    speakNatural(text);
+    return;
+    // eslint-disable-next-line no-unreachable
     if (!text || !window.speechSynthesis) return;
     try {
       window.speechSynthesis.cancel();
@@ -5243,21 +5364,18 @@ Return JSON ONLY in this exact shape:
     if (s.error) $('dialogueBody').insertAdjacentHTML('afterbegin', `<div class="speak-error">${escapeHtml(s.error)}</div>`);
   }
 
-  // Play all turns one after another via Web Speech API.
+  // Play all turns one after another through the unified TTS pipeline (natural
+  // Puter voices when available, browser fallback otherwise).
   function playDialogueAll() {
     const s = state.dialogue;
     if (!s?.result?.turns?.length) return;
-    try { window.speechSynthesis?.cancel(); } catch {}
+    cancelTts();
     const queue = s.result.turns.map(t => cleanLine(t.en)).filter(Boolean);
     let i = 0;
     const speakNext = () => {
       if (i >= queue.length) return;
-      const u = new SpeechSynthesisUtterance(queue[i]);
-      u.lang = 'en-US'; u.rate = 0.95;
-      const v = window.speechSynthesis.getVoices().find(x => /en-US/i.test(x.lang)) || window.speechSynthesis.getVoices().find(x => /^en/i.test(x.lang));
-      if (v) u.voice = v;
-      u.onend = () => { i++; setTimeout(speakNext, 250); };
-      window.speechSynthesis.speak(u);
+      const text = queue[i++];
+      speakNatural(text, { onended: () => setTimeout(speakNext, 220) });
     };
     speakNext();
   }
@@ -5319,7 +5437,16 @@ Return JSON ONLY in this exact shape:
     // Stop any in-flight speech capture / TTS when the coach closes.
     if (id === 'speakModal') { stopSpeechCapture(); try { window.speechSynthesis?.cancel(); } catch {} clearTimeout(state.speakClipTimer); }
   }
-  function updateControls() { el.syncValue.textContent = `${state.offset.toFixed(2)}s`; el.speedBtn.textContent = `${state.speed.toFixed(1)}x`; el.autoPauseBtn.textContent = state.autoPause ? 'On' : 'Off'; if (el.repeatDelayValue) el.repeatDelayValue.textContent = `${state.repeatDelaySeconds}s`; const hb = $('highlightHfBtn'); if (hb) hb.textContent = state.highlightHF ? 'On' : 'Off'; }
+  function updateControls() {
+    el.syncValue.textContent = `${state.offset.toFixed(2)}s`;
+    el.speedBtn.textContent = `${state.speed.toFixed(1)}x`;
+    el.autoPauseBtn.textContent = state.autoPause ? 'On' : 'Off';
+    if (el.repeatDelayValue) el.repeatDelayValue.textContent = `${state.repeatDelaySeconds}s`;
+    const hb = $('highlightHfBtn'); if (hb) hb.textContent = state.highlightHF ? 'On' : 'Off';
+    const tts = (typeof getTtsSettings === 'function') ? getTtsSettings() : null;
+    const eb = $('ttsEngineBtn'); if (eb && tts) eb.textContent = tts.usePuter ? 'On' : 'Off';
+    const vb = $('ttsVoiceBtn'); if (vb && tts) { const v = TTS_VOICE_OPTIONS.find(x => x.id === tts.voice) || TTS_VOICE_OPTIONS[0]; vb.textContent = v.label.replace(/ \([FM]\)$/, ''); }
+  }
 
   async function loadUrl(url, opts = {}) {
     url = String(url || '').trim(); if (!url) return;
@@ -5631,6 +5758,25 @@ Return JSON ONLY in this exact shape:
     if (state.highlightHF) ensureHfThenRefresh();
     else { state.hfCount = 0; state.advCount = 0; renderList(state.listCenter); updateDock(null); }
     toast(state.highlightHF ? 'Key-word highlighting on' : 'Highlighting off');
+  };
+  if ($('ttsEngineBtn')) $('ttsEngineBtn').onclick = () => {
+    const cur = getTtsSettings(); setTtsSettings({ usePuter: !cur.usePuter });
+    TTS_CACHE.clear();   // stale cached audio uses the old engine setting
+    updateControls();
+    toast(cur.usePuter ? 'Browser voice (offline)' : 'Natural voice (Puter)');
+  };
+  if ($('ttsVoiceBtn')) $('ttsVoiceBtn').onclick = () => {
+    const cur = getTtsSettings();
+    const idx = TTS_VOICE_OPTIONS.findIndex(v => v.id === cur.voice);
+    const next = TTS_VOICE_OPTIONS[(idx + 1) % TTS_VOICE_OPTIONS.length];
+    setTtsSettings({ voice: next.id });
+    TTS_CACHE.clear();   // each voice has its own audio
+    updateControls();
+    speakNatural(`Hi, I'm ${next.id}. Let's practice English together.`);
+  };
+  if ($('ttsVoiceTestBtn')) $('ttsVoiceTestBtn').onclick = () => {
+    const v = getTtsSettings().voice;
+    speakNatural(`Hello, this is ${v}. Pick a subtitle and start practicing.`);
   };
   $('goActiveBtn').onclick = () => jumpToCard(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0);
   el.subtitleDock.onclick = () => jumpToCard(currentSubtitleIndex());
