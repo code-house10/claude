@@ -3487,13 +3487,28 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     if (!text || !window.speechSynthesis) return;
     try {
       const u = new SpeechSynthesisUtterance(String(text));
-      u.lang = opts.lang || 'en-US'; u.rate = opts.rate || 0.95; u.pitch = 1;
+      u.lang = opts.lang || 'en-US'; u.rate = opts.rate || 0.95; u.pitch = opts.pitch || 1;
       const voices = window.speechSynthesis.getVoices();
+      // For per-speaker variation on the browser engine we shift pitch slightly
+      // so A and B sound different even with only one OS voice.
       const v = voices.find(x => x.lang === u.lang) || voices.find(x => /^en/i.test(x.lang));
       if (v) u.voice = v;
       if (opts.onended) u.onend = opts.onended;
       window.speechSynthesis.speak(u);
     } catch (e) { console.warn('Browser TTS failed:', e); }
+  }
+
+  // Pick a contrasting voice from the same engine — opposite gender when the
+  // labels declare one — so two speakers in a dialogue sound different.
+  function pickContrastingVoice(engine, currentVoiceId) {
+    const pool = TTS_VOICE_OPTIONS.filter(v => v.engine === engine && v.id !== currentVoiceId);
+    if (!pool.length) return null;
+    const cur = TTS_VOICE_OPTIONS.find(v => v.id === currentVoiceId);
+    const isF = cur && /\(F[,\s)]/.test(cur.label);
+    const isM = cur && /\(M[,\s)]/.test(cur.label);
+    if (isF) { const m = pool.find(v => /\(M[,\s)]/.test(v.label)); if (m) return m; }
+    if (isM) { const f = pool.find(v => /\(F[,\s)]/.test(v.label)); if (f) return f; }
+    return pool[0];
   }
 
   // Fetch + base64-MP3 → <audio> for Inworld (via our /api/inworld-tts proxy).
@@ -3586,8 +3601,13 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   }
 
   // Try one engine; on success return true, on failure throw to caller.
+  // `cfg` may carry { rate, onended, pitch }. `preferredId` is the voice ID
+  // the caller asked for (overrides global settings, e.g. per-speaker dialogue).
   async function attemptEngine(engine, text, preferredId, cfg) {
-    if (engine === 'browser') { speakBrowserFallback(text, { onended: cfg.onended }); return true; }
+    if (engine === 'browser') {
+      speakBrowserFallback(text, { onended: cfg.onended, rate: cfg.rate, pitch: cfg.pitch });
+      return true;
+    }
     if (engine === 'puter' && !window.puter?.ai?.txt2speech) throw new Error('Puter SDK not loaded');
     const voice = defaultVoiceFor(engine, preferredId);
     if (!voice) throw new Error(`No voice configured for ${engine}`);
@@ -3607,26 +3627,41 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     return true;
   }
 
+  // opts:
+  //   voice    — override voice ID (must belong to a supported engine; we
+  //              detect the engine from the voice and try it FIRST in the
+  //              cascade, falling back to user's chosen engine etc.)
+  //   rate     — playback rate (1 = normal). Lets Dialogue Practice slow down.
+  //   pitch    — browser fallback only (used to differentiate A/B if forced).
+  //   onended  — called after audio finishes (for chaining playback).
   async function speakNatural(text, opts = {}) {
     text = String(text || '').trim();
     if (!text) return;
     const cfg = getTtsSettings();
     cancelTts();
     const safeText = text.length > 2500 ? text.slice(0, 2500) : text;
+    const rate = Number.isFinite(Number(opts.rate)) ? Number(opts.rate) : cfg.rate;
 
-    // Build cascade: chosen provider first, then the rest of the priority list
-    // in the order defined by TTS_PROVIDERS, browser is always last.
-    const cascade = [cfg.provider, ...TTS_PROVIDERS.filter(p => p !== cfg.provider)];
+    // If the caller asked for a specific voice, find its engine and try that
+    // first. The chosen engine still leads the cascade for unrecognised voices.
+    const overrideVoice = opts.voice
+      ? TTS_VOICE_OPTIONS.find(v => v.id === opts.voice)
+      : null;
+    const lead = overrideVoice ? overrideVoice.engine : cfg.provider;
+    const leadVoiceId = overrideVoice ? overrideVoice.id : cfg.voice;
+    const cascade = [lead, ...TTS_PROVIDERS.filter(p => p !== lead)];
 
     for (const engine of cascade) {
       try {
-        await attemptEngine(engine, safeText, cfg.voice, { rate: cfg.rate, onended: opts.onended });
+        // Use the override voice only when we're still on its engine; once we
+        // fall back to a different engine we let it pick its own first voice.
+        const voiceForThis = engine === lead ? leadVoiceId : cfg.voice;
+        await attemptEngine(engine, safeText, voiceForThis, { rate, onended: opts.onended, pitch: opts.pitch });
         return;
       } catch (e) {
         console.warn(`TTS engine "${engine}" failed, trying next:`, e?.message || e);
       }
     }
-    // Should be unreachable: browser is the last fallback and shouldn't throw.
     console.error('All TTS engines failed for:', safeText);
   }
 
@@ -5188,6 +5223,14 @@ Return JSON ONLY, no extra text, in exactly this shape:
     const length = opts.length || 'short';   // short | medium | long
     const turns = length === 'long' ? '10-12' : (length === 'medium' ? '6-8' : '4-6');
     const list = items.map((it, i) => `${i + 1}. "${cleanLine(it.term)}"${it.ar ? ` (= ${it.ar})` : ''}`).join('\n');
+    const fillersBlock = opts.naturalFillers
+      ? `- Sprinkle SPARINGLY (max 1 per 3 turns) natural conversational fillers and reactions IN-TEXT so any TTS reads them aloud:
+    • Hesitation: "uh", "um", "hmm", "well…"
+    • Reactions: "oh!", "wow", "really?", "huh"
+    • Laughter: write "haha", "hehe" (no asterisks, no brackets — plain text only).
+    • Surprise/sigh: write "oh my", "ugh", "ahh".
+  Use them where a real speaker WOULD naturally hesitate or react. Never break the meaning. Do NOT use SSML, brackets, or asterisks — plain text only so every voice engine reads them.`
+      : `- Keep speech clean and direct. No filler words or interjections.`;
     return `You are an English teacher writing natural everyday dialogues for an Egyptian Arabic-speaking learner.
 
 WRITE a short, natural, REALISTIC English dialogue between TWO speakers (A and B) about a common everyday situation, that NATURALLY uses EVERY one of these target terms (in their natural inflected form is fine — e.g. "recommended" for "recommend"):
@@ -5199,8 +5242,9 @@ REQUIREMENTS:
 - ${turns} turns total, alternating A / B / A / B.
 - Conversational, not textbook. Use contractions and natural connectors ("yeah, well, actually, by the way…").
 - Every target term MUST appear at least once across the dialogue. It must feel natural, never forced.
+${fillersBlock}
 - Situation: ${situation || 'pick a believable daily situation that fits the words (café, work chat, calling a friend, planning a trip, asking for advice, family dinner, etc.)'}
-- For EACH line, give an Egyptian colloquial Arabic translation (المصرية الدارجة) — friendly, not formal MSA, no transliteration.
+- For EACH line, give an Egyptian colloquial Arabic translation (المصرية الدارجة) — friendly, not formal MSA, no transliteration. Translate the meaning naturally; you don't need to keep the fillers in Arabic if they sound awkward.
 - Keep each line short enough to say in one breath.
 
 Return JSON ONLY in this exact shape:
@@ -5276,6 +5320,9 @@ Return JSON ONLY in this exact shape:
 
   function ensureDialogueState(reset = false) {
     if (reset || !state.dialogue) {
+      const ttsCfg = getTtsSettings();
+      const voiceA = ttsCfg.voice;
+      const voiceB = pickContrastingVoice(ttsCfg.provider, voiceA)?.id || voiceA;
       state.dialogue = {
         step: 'picker',            // picker | generating | result | history
         selectedIds: new Set(),
@@ -5284,6 +5331,12 @@ Return JSON ONLY in this exact shape:
         situation: '',
         length: 'short',
         provider: 'puter',
+        // Per-speaker voices + speech rate + interjection toggle. Voices are
+        // restricted to the current TTS engine's pool in the picker UI.
+        voiceA,
+        voiceB,
+        rate: 0.95,
+        naturalFillers: true,
         result: null,
         error: ''
       };
@@ -5306,6 +5359,22 @@ Return JSON ONLY in this exact shape:
     if (s.step === 'generating') return renderDialogueGenerating(body);
     if (s.step === 'result')     return renderDialogueResult(body);
     if (s.step === 'history')    return renderDialogueHistory(body);
+  }
+
+  // Compact A/B voice button. Shows speaker letter + voice short label,
+  // tap to cycle within the current engine's pool, long-press not needed.
+  function renderDialogueVoiceBtn(speaker, voiceId) {
+    const cfg = getTtsSettings();
+    const v = TTS_VOICE_OPTIONS.find(x => x.id === voiceId && x.engine === cfg.provider)
+           || TTS_VOICE_OPTIONS.find(x => x.engine === cfg.provider)
+           || TTS_VOICE_OPTIONS[0];
+    const label = v ? v.label.replace(/ \([FM][^)]*\)$/, '') : voiceId;
+    const colorClass = speaker === 'A' ? 'd-vox-a' : 'd-vox-b';
+    return `<button class="d-vox ${colorClass}" data-d-voice-cycle="${speaker}">
+      <span class="d-vox-spkr">${speaker}</span>
+      <span class="d-vox-name">${escapeHtml(label)}</span>
+      <span class="d-vox-test" data-d-voice-test="${speaker}" title="Preview">🔊</span>
+    </button>`;
   }
 
   function renderDialoguePicker(body) {
@@ -5364,6 +5433,35 @@ Return JSON ONLY in this exact shape:
             <button class="d-seg-btn${s.provider==='openrouter'?' on':''}${orRouterReady?'':' disabled'}" data-d-provider="openrouter" ${orRouterReady?'':'title="Set an OpenRouter key first"'}>🤖 OpenRouter<small>${orRouterReady ? 'free models' : 'needs key'}</small></button>
           </div>
         </div>
+
+        <div class="d-field">
+          <span>Voices (per speaker)</span>
+          <div class="d-voice-row">
+            ${renderDialogueVoiceBtn('A', s.voiceA)}
+            ${renderDialogueVoiceBtn('B', s.voiceB)}
+          </div>
+          <small class="d-hint">Tap to cycle voices in the active TTS engine. Speaker A vs B get different voices so the conversation sounds real.</small>
+        </div>
+
+        <div class="d-field">
+          <span>Speaking speed</span>
+          <div class="d-seg">
+            ${[
+              { v: 0.7,  l: '0.7×', sub: 'slow / clear' },
+              { v: 0.85, l: '0.85×', sub: 'relaxed' },
+              { v: 0.95, l: '0.95×', sub: 'natural' },
+              { v: 1.0,  l: '1.0×', sub: 'normal' }
+            ].map(o => `<button class="d-seg-btn${Math.abs((s.rate||0.95)-o.v)<0.02?' on':''}" data-d-rate="${o.v}">${o.l}<small>${o.sub}</small></button>`).join('')}
+          </div>
+        </div>
+
+        <div class="d-field">
+          <span>Natural interjections</span>
+          <div class="d-seg">
+            <button class="d-seg-btn${s.naturalFillers?' on':''}" data-d-fillers="1">😄 On<small>haha / uh / oh / hmm</small></button>
+            <button class="d-seg-btn${!s.naturalFillers?' on':''}" data-d-fillers="0">🚫 Off<small>clean speech</small></button>
+          </div>
+        </div>
       </details>
       <button class="full-btn d-generate" ${sel === 0 ? 'disabled' : ''} data-d-generate>✨ Generate dialogue with ${sel} ${sel === 1 ? 'term' : 'terms'}</button>
     `;
@@ -5402,14 +5500,20 @@ Return JSON ONLY in this exact shape:
     const r = s.result;
     if (!r) { body.innerHTML = `<p class="hint-small">No dialogue yet.</p>`; return; }
     const terms = (r.targets || []).map(t => t.term);
-    const turnsHtml = (r.turns || []).map((t, i) => `<div class="d-turn d-${t.speaker === 'B' ? 'b' : 'a'}">
+    const voiceA = s.voiceA || getTtsSettings().voice;
+    const voiceB = s.voiceB || voiceA;
+    const turnsHtml = (r.turns || []).map((t, i) => {
+      const isB = t.speaker === 'B';
+      const vid = isB ? voiceB : voiceA;
+      return `<div class="d-turn d-${isB ? 'b' : 'a'}">
       <span class="d-spkr">${escapeHtml(t.speaker || (i % 2 === 0 ? 'A' : 'B'))}</span>
       <div class="d-turn-body">
         <div class="d-en" dir="ltr">${highlightTargetsInLine(cleanLine(t.en), terms)}</div>
         ${t.ar ? `<div class="d-ar-line" dir="rtl">${escapeHtml(cleanLine(t.ar))}</div>` : ''}
-        <button class="ex-speak" data-speak-ex="${escapeHtml(cleanLine(t.en))}" title="Speak">🔊</button>
+        <button class="ex-speak" data-speak-ex="${escapeHtml(cleanLine(t.en))}" data-speak-voice="${escapeHtml(vid)}" data-speak-rate="${s.rate || 0.95}" title="Speak">🔊</button>
       </div>
-    </div>`).join('');
+    </div>`;
+    }).join('');
 
     const targetsBar = `<div class="d-targets">${(r.targets || []).map(t => `<span class="d-target-chip" dir="ltr">${escapeHtml(t.term)}</span>`).join('')}</div>`;
 
@@ -5454,7 +5558,7 @@ Return JSON ONLY in this exact shape:
     try {
       const result = await generateDialogue(
         picked.map(it => ({ term: it.term, ar: it.ar })),
-        { situation: s.situation, length: s.length, provider: s.provider }
+        { situation: s.situation, length: s.length, provider: s.provider, naturalFillers: s.naturalFillers }
       );
       s.result = {
         id: 'd_' + Date.now(),
@@ -5480,18 +5584,24 @@ Return JSON ONLY in this exact shape:
     if (s.error) $('dialogueBody').insertAdjacentHTML('afterbegin', `<div class="speak-error">${escapeHtml(s.error)}</div>`);
   }
 
-  // Play all turns one after another through the unified TTS pipeline (natural
-  // Puter voices when available, browser fallback otherwise).
+  // Play all turns one after another, alternating between speaker A's and
+  // speaker B's chosen voices so the conversation actually sounds like two
+  // people. Uses the picker's chosen speech rate.
   function playDialogueAll() {
     const s = state.dialogue;
     if (!s?.result?.turns?.length) return;
     cancelTts();
-    const queue = s.result.turns.map(t => cleanLine(t.en)).filter(Boolean);
+    const voiceA = s.voiceA || getTtsSettings().voice;
+    const voiceB = s.voiceB || voiceA;
+    const rate = s.rate || 0.95;
+    const queue = s.result.turns
+      .map(t => ({ text: cleanLine(t.en), voice: t.speaker === 'B' ? voiceB : voiceA }))
+      .filter(x => x.text);
     let i = 0;
     const speakNext = () => {
       if (i >= queue.length) return;
-      const text = queue[i++];
-      speakNatural(text, { onended: () => setTimeout(speakNext, 220) });
+      const t = queue[i++];
+      speakNatural(t.text, { voice: t.voice, rate, onended: () => setTimeout(speakNext, 260) });
     };
     speakNext();
   }
@@ -5697,7 +5807,14 @@ Return JSON ONLY in this exact shape:
       return;
     }
     const openTermBtn = e.target.closest('[data-open-term]'); if (openTermBtn) { openDict(openTermBtn.dataset.openTerm, Number(openTermBtn.dataset.index)); return; }
-    const speakExBtn = e.target.closest('[data-speak-ex]'); if (speakExBtn) { speak(speakExBtn.dataset.speakEx); return; }
+    const speakExBtn = e.target.closest('[data-speak-ex]');
+    if (speakExBtn) {
+      const opts = {};
+      if (speakExBtn.dataset.speakVoice) opts.voice = speakExBtn.dataset.speakVoice;
+      if (speakExBtn.dataset.speakRate) opts.rate = Number(speakExBtn.dataset.speakRate);
+      speakNatural(speakExBtn.dataset.speakEx, opts);
+      return;
+    }
     if (e.target.closest('[data-open-connected]')) { closeModal('reductionModal'); showConnectedSpeech(); return; }
 
     // ── Dialogue practice ─────────────────────────────────────────
@@ -5707,6 +5824,31 @@ Return JSON ONLY in this exact shape:
     if (e.target.closest('[data-d-clear]')) { ensureDialogueState().selectedIds.clear(); renderDialogue(); return; }
     const dLen = e.target.closest('[data-d-length]'); if (dLen) { ensureDialogueState().length = dLen.dataset.dLength; renderDialogue(); return; }
     const dProv = e.target.closest('[data-d-provider]'); if (dProv) { if (dProv.classList.contains('disabled')) { toast('Add an OpenRouter key in Settings first'); return; } ensureDialogueState().provider = dProv.dataset.dProvider; renderDialogue(); return; }
+    const dRate = e.target.closest('[data-d-rate]'); if (dRate) { ensureDialogueState().rate = Number(dRate.dataset.dRate) || 0.95; renderDialogue(); return; }
+    const dFill = e.target.closest('[data-d-fillers]'); if (dFill) { ensureDialogueState().naturalFillers = dFill.dataset.dFillers === '1'; renderDialogue(); return; }
+    // Voice cycling for speaker A / B — restricted to the active TTS engine.
+    const dVoiceTest = e.target.closest('[data-d-voice-test]');
+    if (dVoiceTest) {
+      e.stopPropagation();
+      const sp = dVoiceTest.dataset.dVoiceTest; const ds = ensureDialogueState();
+      const vid = sp === 'A' ? ds.voiceA : ds.voiceB;
+      speakNatural(`Hi, I'm speaker ${sp}.`, { voice: vid, rate: ds.rate });
+      return;
+    }
+    const dVoiceCycle = e.target.closest('[data-d-voice-cycle]');
+    if (dVoiceCycle) {
+      const sp = dVoiceCycle.dataset.dVoiceCycle; const ds = ensureDialogueState();
+      const cfg = getTtsSettings();
+      const pool = TTS_VOICE_OPTIONS.filter(v => v.engine === cfg.provider);
+      if (!pool.length) { toast(`No voices for ${cfg.provider}`); return; }
+      const curId = sp === 'A' ? ds.voiceA : ds.voiceB;
+      const idx = pool.findIndex(v => v.id === curId);
+      const next = pool[(idx + 1) % pool.length];
+      if (sp === 'A') ds.voiceA = next.id; else ds.voiceB = next.id;
+      renderDialogue();
+      speakNatural(`Speaker ${sp} — ${next.id}.`, { voice: next.id, rate: ds.rate });
+      return;
+    }
     if (e.target.closest('[data-d-generate]')) { startDialogueGeneration(); return; }
     if (e.target.closest('[data-d-back]')) { const s = ensureDialogueState(); s.step = 'picker'; renderDialogue(); return; }
     if (e.target.closest('[data-d-regenerate]')) { startDialogueGeneration(); return; }

@@ -344,6 +344,17 @@
 .d-seg-btn small{font-size:10px;font-weight:700;color:#94a3b8}
 .d-seg-btn.on{background:#0f172a;color:#fff;border-color:#0f172a}.d-seg-btn.on small{color:#86efac}
 .d-seg-btn.disabled{opacity:.5;cursor:not-allowed}
+.d-hint{display:block;color:#94a3b8;font-size:11px;font-weight:700;margin-top:5px;line-height:1.45}
+/* A/B voice pickers in dialogue options */
+.d-voice-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.d-vox{display:flex;align-items:center;gap:8px;border:1px solid #e2e8f0;background:#fff;border-radius:13px;padding:9px 11px;cursor:pointer;-webkit-tap-highlight-color:transparent;font-weight:800;font-size:13px;color:#0f172a;text-align:left;min-width:0}
+.d-vox:active{transform:scale(.98)}
+.d-vox-spkr{flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:900;font-size:13px}
+.d-vox.d-vox-a{background:#eff6ff;border-color:#bfdbfe}.d-vox.d-vox-a .d-vox-spkr{background:#0ea5e9}
+.d-vox.d-vox-b{background:#faf5ff;border-color:#e9d5ff}.d-vox.d-vox-b .d-vox-spkr{background:#a855f7}
+.d-vox-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-vox-test{flex:none;background:rgba(15,23,42,.06);border-radius:8px;padding:3px 7px;font-size:13px;cursor:pointer}
+.d-vox-test:hover{background:rgba(15,23,42,.14)}
 
 .d-generate{margin-top:4px}
 .d-generate[disabled]{opacity:.5;cursor:not-allowed;background:#cbd5e1!important}
