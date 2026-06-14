@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-picker-focus-v19';
-const ASSETS = ['./', './index.html', './style.css?v=picker-focus-v19', './app.js?v=picker-focus-v19', './vocab-data.js?v=picker-focus-v19'];
+const CACHE_NAME = 'jungle-movie-custom-word-v20';
+const ASSETS = ['./', './index.html', './style.css?v=custom-word-v20', './app.js?v=custom-word-v20', './vocab-data.js?v=custom-word-v20'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

@@ -5858,6 +5858,58 @@ Return JSON ONLY in this exact shape:
     openModal('reductionModal');
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // CUSTOM-WORD LOOKUP — any word, even outside the loaded movie.
+  //
+  // Reuses openDict() entirely (translation + 5 Puter examples + Save), so
+  // every quality we already invested in (Egyptian Arabic, "alt" hints,
+  // natural-context notes, TTS) applies automatically. This function just
+  // collects the term, remembers recent lookups, and hands off.
+  // ════════════════════════════════════════════════════════════════
+
+  const ADD_WORD_RECENT_KEY = 'jm_recent_lookups';
+  const ADD_WORD_RECENT_MAX = 10;
+
+  function recentLookups() {
+    return readJSON(ADD_WORD_RECENT_KEY, []);
+  }
+  function pushRecentLookup(term) {
+    const t = cleanLine(term).toLowerCase();
+    if (!t) return;
+    const list = recentLookups().filter(x => x.toLowerCase() !== t);
+    list.unshift(t);
+    writeJSON(ADD_WORD_RECENT_KEY, list.slice(0, ADD_WORD_RECENT_MAX));
+  }
+
+  function renderAddWordRecent() {
+    const wrap = $('addWordRecent');
+    if (!wrap) return;
+    const list = recentLookups();
+    if (!list.length) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = `<p class="add-word-recent-label">Recent</p>` + list.map(t =>
+      `<button class="add-word-chip" data-add-recent="${escapeHtml(t)}" dir="ltr">${escapeHtml(t)}</button>`
+    ).join('');
+  }
+
+  function openAddWordModal() {
+    openMenu(false);
+    renderAddWordRecent();
+    openModal('addWordModal');
+    setTimeout(() => { const inp = $('addWordInput'); if (inp) { inp.value = ''; inp.focus(); } }, 60);
+  }
+
+  function submitAddWord(termOverride) {
+    const inp = $('addWordInput');
+    const raw = termOverride || (inp ? inp.value : '');
+    const term = cleanLine(raw);
+    if (!term) { toast('Type a word first'); inp?.focus(); return; }
+    pushRecentLookup(term);
+    closeModal('addWordModal');
+    // idx = -1 → no subtitle context; openDict handles that gracefully and
+    // simply doesn't show "phrases in this line" suggestions.
+    openDict(term, -1);
+  }
+
   function openMenu(show=true) { el.menuSheet.classList.toggle('hidden', !show); }
   function openModal(id) { $(id).classList.remove('hidden'); }
   function closeModal(id) {
@@ -6009,6 +6061,7 @@ Return JSON ONLY in this exact shape:
       return;
     }
     const openTermBtn = e.target.closest('[data-open-term]'); if (openTermBtn) { openDict(openTermBtn.dataset.openTerm, Number(openTermBtn.dataset.index)); return; }
+    const recentBtn = e.target.closest('[data-add-recent]'); if (recentBtn) { submitAddWord(recentBtn.dataset.addRecent); return; }
     const speakExBtn = e.target.closest('[data-speak-ex]');
     if (speakExBtn) {
       const opts = {};
@@ -6213,6 +6266,12 @@ Return JSON ONLY in this exact shape:
   $('menuSavedLines').onclick = () => { openMenu(false); showSaved('lines'); };
   $('menuReviewCards').onclick = showReviewCards;
   if ($('menuConnectedSpeech')) $('menuConnectedSpeech').onclick = showConnectedSpeech;
+  if ($('menuAddCustomWord')) $('menuAddCustomWord').onclick = () => { openMenu(false); openAddWordModal(); };
+  if ($('addWordBtn')) $('addWordBtn').onclick = () => openAddWordModal();
+  if ($('addWordSubmit')) $('addWordSubmit').onclick = submitAddWord;
+  if ($('addWordInput')) $('addWordInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitAddWord(); }
+  });
   if ($('menuDialoguePractice')) $('menuDialoguePractice').onclick = openDialoguePractice;
   if ($('menuSpeakingCoach')) $('menuSpeakingCoach').onclick = () => { openMenu(false); openSpeakingCoach(currentSubtitleIndex() >= 0 ? currentSubtitleIndex() : 0); };
   $('menuSaveCloud').onclick = saveLessonToCloud;
