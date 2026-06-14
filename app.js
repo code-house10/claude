@@ -5900,7 +5900,10 @@ Return JSON ONLY in this exact shape:
 
   function submitAddWord(termOverride) {
     const inp = $('addWordInput');
-    const raw = termOverride || (inp ? inp.value : '');
+    // Guard: when this is wired as a click handler the first arg is a
+    // PointerEvent, not a term. Only accept strings as the override.
+    const override = typeof termOverride === 'string' ? termOverride : '';
+    const raw = override || (inp ? inp.value : '');
     const term = cleanLine(raw);
     if (!term) { toast('Type a word first'); inp?.focus(); return; }
     pushRecentLookup(term);
