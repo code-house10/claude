@@ -20,6 +20,17 @@
 .saved-example{position:relative;padding-top:8px}
 .saved-example .ex-speak{position:absolute;top:6px;inset-inline-end:6px;padding:4px 8px;font-size:13px}
 .saved-example p[dir=ltr]{padding-inline-end:38px}
+/* Why-this-fits notes (per dict/template example) */
+.ex-note{margin:6px 0 0;color:#475569;font-weight:700;font-size:12px;line-height:1.55;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:6px 10px;direction:rtl}
+/* Why-this-fits notes per dialogue target */
+.d-notes{background:#fffbeb;border:1px solid #fde68a;border-radius:14px;overflow:hidden;margin:4px 0 2px}
+.d-notes>summary{cursor:pointer;padding:9px 12px;font-weight:900;font-size:13px;color:#92400e;list-style:none;display:flex;justify-content:space-between;align-items:center}
+.d-notes>summary::-webkit-details-marker{display:none}
+.d-notes>summary::after{content:'▾';color:#b45309;transition:transform .2s}
+.d-notes[open]>summary::after{transform:rotate(180deg)}
+.d-note-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;padding:8px 12px;border-top:1px solid #fde68a;background:#fff}
+.d-note-term{background:#fed7aa;color:#9a3412;border-radius:8px;padding:3px 9px;font-weight:900;font-size:12px;flex:none}
+.d-note-text{flex:1;min-width:0;color:#7c2d12;font-weight:700;font-size:13px;line-height:1.55}
 .saved-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:9px}.due-chip{font-size:11px;background:#eef2ff;color:#3730a3;border-radius:999px;padding:6px 9px;font-weight:800}.review-card{background:#f8fafc;border:1px solid #e5e7eb;border-radius:20px;padding:14px;box-shadow:0 8px 22px rgba(15,23,42,.08)}.review-count{display:inline-flex;background:#e0f2fe;color:#0369a1;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:900;margin-bottom:10px}.review-front{font-size:19px;font-weight:900;line-height:1.55;background:#fff;border:1px solid #eef2f7;border-radius:16px;padding:14px;text-align:left}.review-back{font-size:17px;font-weight:900;line-height:1.6;background:#ecfdf5;color:#047857;border:1px solid #bbf7d0;border-radius:16px;padding:14px;margin-top:10px}.review-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.review-actions .again{background:#fee2e2;color:#991b1b}.review-actions .hard{background:#fef3c7;color:#92400e}.review-actions .good{background:#dcfce7;color:#166534}.review-actions .easy{background:#ede9fe;color:#5b21b6}.review-empty{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:18px;padding:18px;text-align:center}.menu-grid{grid-template-columns:1fr 1fr}.menu-grid button:nth-child(6){background:#ede9fe;color:#5b21b6}.menu-grid button:nth-child(7){background:#ecfdf5;color:#047857}
 
 /* Multi-subtitle repeat + smart word cards refinements */

@@ -1473,8 +1473,8 @@ Usage in Arabic: ${cleanLine(template?.usageAr || '')}`;
     const seen = new Set();
     const push = ex => {
       const item = typeof ex === 'string'
-        ? { en: cleanLine(ex), ar: '' }
-        : { en: cleanLine(ex?.en || ''), ar: cleanLine(ex?.ar || '') };
+        ? { en: cleanLine(ex), ar: '', note: '' }
+        : { en: cleanLine(ex?.en || ''), ar: cleanLine(ex?.ar || ''), note: cleanLine(ex?.note || '') };
       if (!item.en || looksLikeBadTemplateExample(item)) return;
       if (looksLikeTemplatePlaceholderArabic(item.ar)) item.ar = '';
       if (!/[.!?]$/.test(item.en)) item.en += '.';
@@ -1741,47 +1741,45 @@ Usage in Arabic: ${cleanLine(template?.usageAr || '')}`;
     const slot = cleanLine(template?.slot || template?.templateSlot || '');
     const usageEn = cleanLine(template?.usageEn || template?.templateUsageEn || '');
     const usageAr = cleanLine(template?.usageAr || template?.templateUsageAr || '');
-    return `You are an expert English tutor for an Arabic-speaking learner.
+    return `You are writing realistic English examples for an Arabic-speaking learner — lines that could appear in a movie, a TV show, or a real conversation.
 
-TASK:
-Use the sentence template below to generate 3 natural, complete, everyday English examples.
-Translate each example into natural Arabic.
+TEMPLATE: ${pattern}
+${source ? `ORIGINAL MOVIE LINE: ${source}` : ''}
+${slot ? `ORIGINAL REPLACED PART: ${slot}` : ''}
+${usageEn ? `WHEN NATIVES USE IT (EN): ${usageEn}` : ''}
+${usageAr ? `WHEN NATIVES USE IT (AR): ${usageAr}` : ''}
 
-TEMPLATE:
-${pattern}
+GENERATE EXACTLY 3 REALISTIC EXAMPLES that sound like native everyday English.
 
-ORIGINAL MOVIE LINE / CONTEXT:
-${source}
+CORE PRINCIPLES — follow strictly:
+1. First decide how native speakers ACTUALLY use this template — register, situation, tone.
+2. Build a realistic SITUATION around that usage, then fit the template in.
+3. Never force the template just to fill the slot — if a phrasing sounds awkward, change the situation.
+4. Prioritize natural conversation over template coverage.
+5. Avoid textbook sentences. No drills like "I want to eat an apple." Aim for lines a real person would say.
+6. Match register: if the template is casual, examples are casual; if it's formal, keep them formal.
+7. If it's a question, every example must be a complete question.
+8. If it expresses annoyance, the examples should sound naturally annoyed, not rude.
+9. Vary situations across the 3 examples (don't reuse the same scene).
+10. Replace every bracket placeholder like [do something], [someone], [somewhere] with realistic daily-life content. Never keep brackets.
 
-ORIGINAL REPLACED PART:
-${slot}
+For EACH example also write a one-line note (Arabic, دارجة) explaining WHY this template feels natural in that exact situation.
 
-USAGE EN:
-${usageEn}
+Translations: natural EGYPTIAN COLLOQUIAL ARABIC (المصرية الدارجة), no formal MSA, no transliteration.
 
-USAGE AR:
-${usageAr}
-
-STRICT RULES:
-- Return JSON only. No markdown. No explanations.
-- The JSON must be an array of exactly 3 objects.
-- Each object must be: {"en":"...", "ar":"..."}
-- Replace every bracket placeholder like [do something], [something], [someone], [somewhere], [time] with realistic daily-life content.
-- Do not keep brackets [] in the examples.
-- Do not write incomplete sentences.
-- Do not write meta sentences like "examples of template" or "using the same template".
-- Do not create strange examples. Make them useful for daily conversation.
-- Keep the same grammar structure and tone of the template.
-- If the template sounds casual, keep the examples casual.
-- If the template is a question, every example must be a complete question.
-- If the template expresses annoyance, the examples should sound naturally annoyed, not rude.
+Return JSON ONLY (no markdown, no commentary) in this exact shape:
+{"examples":[
+  {"en":"...", "ar":"...", "note":"..."},
+  {"en":"...", "ar":"...", "note":"..."},
+  {"en":"...", "ar":"...", "note":"..."}
+]}
 
 Good output example:
-[
-  {"en":"Shouldn't you be at work by now?", "ar":"ألا يفترض أن تكون في العمل الآن؟"},
-  {"en":"Shouldn't you be getting ready for class?", "ar":"ألا يفترض أن تستعد للحصة؟"},
-  {"en":"Shouldn't you be on your way to school?", "ar":"ألا يفترض أن تكون في طريقك إلى المدرسة؟"}
-]`;
+{"examples":[
+  {"en":"Shouldn't you be at work by now?", "ar":"مش المفروض تكون في الشغل دلوقتي؟", "note":"موقف عتاب لطيف بين صحاب — طبيعي لما حد متأخر."},
+  {"en":"Shouldn't you be getting ready for class?", "ar":"مش المفروض تكون بتجهّز للحصة؟", "note":"أم بتنبّه ابنها — استخدام يومي شائع."},
+  {"en":"Shouldn't you be on your way to school?", "ar":"مش المفروض تكون في الطريق للمدرسة؟", "note":"موقف بيتي صباحي — جملة مألوفة جداً."}
+]}`;
   }
 
   async function fetchTemplateExamplesFromPuter(template, contextEn = '') {
@@ -1799,6 +1797,7 @@ Good output example:
         const examples = sanitizeTemplateExamples(rawList.map(x => ({
           en: cleanLine(x?.en || x?.english || ''),
           ar: cleanLine(x?.ar || x?.arabic || ''),
+          note: cleanLine(x?.note || x?.why || ''),
           source: 'puter-ai'
         })), template.pattern, contextEn || template.source || '');
         if (examples.length >= 3) return examples.slice(0, 3);
@@ -1822,12 +1821,13 @@ Good output example:
     const parsed = await callOpenRouterJson(prompt, {
       temperature: 0.28,
       maxTokens: 900,
-      system: 'You are an expert English tutor. Return JSON only: an array of exactly 3 objects, each with en and ar. Use natural daily-life English and natural Arabic.'
+      system: 'You write realistic English examples for an Arabic learner. Return JSON only in the exact shape requested: {"examples":[{"en":"...","ar":"...","note":"..."},...]} — natural daily-life English with Egyptian colloquial Arabic and a short Arabic note about WHY each fits.'
     });
     const rawList = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.examples) ? parsed.examples : []);
     return sanitizeTemplateExamples(rawList.map(x => ({
       en: cleanLine(x?.en || x?.english || ''),
       ar: cleanLine(x?.ar || x?.arabic || ''),
+      note: cleanLine(x?.note || x?.why || ''),
       source: 'openrouter-ai'
     })), template.pattern, contextEn || template.source || '').slice(0, 3);
   }
@@ -3814,18 +3814,40 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   }
 
   // Generate 5 natural example sentences for a word or phrasal verb, each with
-  // an Egyptian-colloquial Arabic translation, in a single Puter AI call.
+  // an Egyptian-colloquial Arabic translation + a short note explaining why
+  // the word sounds natural in that specific context.
   function buildPuterWordExamplesPrompt(term, contextEn = '') {
     const isPhrase = String(term).includes(' ');
-    return `You are an English teacher for an Egyptian Arabic-speaking learner.
-Give EXACTLY 5 short, natural, everyday example sentences using the English ${isPhrase ? 'phrase / phrasal verb' : 'word'} "${term}".
-${contextEn ? `The learner met it in this line: "${contextEn}". Keep at least one example close to that meaning.` : ''}
-Rules:
-- Each English sentence must actually contain "${term}" (or its natural inflected form).
-- Keep sentences short and useful for daily speaking.
-- For each one, add a NATURAL EGYPTIAN COLLOQUIAL ARABIC translation (المصرية الدارجة) — friendly, not formal MSA, no transliteration.
-Return JSON ONLY:
-{"examples":[{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."}]}`;
+    return `You are writing realistic English example sentences for an Egyptian Arabic-speaking learner.
+
+TARGET ${isPhrase ? 'PHRASE / PHRASAL VERB' : 'WORD'}: "${term}"
+${contextEn ? `LEARNER FIRST MET IT IN: "${contextEn}"` : ''}
+
+GENERATE EXACTLY 5 SHORT, REALISTIC EXAMPLES that sound like native everyday English (lines you'd hear in a movie, a TV show, or a real conversation).
+
+CORE PRINCIPLES — follow these strictly:
+1. First decide HOW native speakers actually use "${term}" — register (casual / neutral / formal), typical situations, common collocations.
+2. Then build a realistic situation around that usage. Do NOT shoehorn the word into random contexts.
+3. If "${term}" is rare, formal, technical, or literary — pick the kind of context where a native speaker WOULD naturally use it (news, business, academic, dramatic). Don't pretend it's casual when it isn't.
+4. Never force the word into a sentence. If a sentence sounds awkward, change the SITUATION until the word feels right.
+5. Prioritize natural conversation over vocabulary coverage.
+6. Avoid textbook-style sentences and obvious vocabulary drills. No "I will go to the shop to buy bread" mechanical patterns.
+7. Don't write something a native would find weird or stilted.
+8. Vary the situations — don't reuse the same scene 5 times.
+9. Use the natural inflected form when needed (e.g. "recommended", "recommendation" instead of bare "recommend").
+
+For EACH example, ALSO write a one-line Arabic note (المصرية الدارجة) explaining WHY the word fits this exact situation — what context makes it sound natural here.
+
+Translations must be NATURAL EGYPTIAN COLLOQUIAL ARABIC (المصرية الدارجة) — friendly, not formal MSA, no transliteration, no quotation marks.
+
+Return JSON ONLY, no other text:
+{"examples":[
+  {"en":"...","ar":"...","note":"..."},
+  {"en":"...","ar":"...","note":"..."},
+  {"en":"...","ar":"...","note":"..."},
+  {"en":"...","ar":"...","note":"..."},
+  {"en":"...","ar":"...","note":"..."}
+]}`;
   }
 
   async function fetchWordExamplesFromPuter(term, contextEn = '') {
@@ -3838,7 +3860,11 @@ Return JSON ONLY:
         const parsed = parseJsonLoose(puterResponseToText(resp));
         const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.examples) ? parsed.examples : []);
         const rows = list
-          .map(x => ({ en: cleanLine(x?.en || x?.english || ''), ar: cleanPuterArabicTranslation(x?.ar || x?.arabic || '') }))
+          .map(x => ({
+            en: cleanLine(x?.en || x?.english || ''),
+            ar: cleanPuterArabicTranslation(x?.ar || x?.arabic || ''),
+            note: cleanLine(x?.note || x?.why || x?.reason || '')
+          }))
           .filter(x => x.en)
           .slice(0, 5);
         if (rows.length) return rows;
@@ -3868,7 +3894,12 @@ Return JSON ONLY:
 
   // Build dict-example HTML rows, each with its own 🔊 speak button.
   function renderDictExampleRows(examples) {
-    return examples.map(ex => `<div class="example"><div class="ex-head"><button class="ex-speak" data-speak-ex="${escapeHtml(ex.en)}" title="Speak">🔊</button></div><p class="ex-en" dir="ltr">${escapeHtml(ex.en)}</p><p class="ex-ar" dir="rtl">${escapeHtml(ex.ar || 'تعذر ترجمة المثال')}</p></div>`).join('');
+    return examples.map(ex => `<div class="example">
+      <div class="ex-head"><button class="ex-speak" data-speak-ex="${escapeHtml(ex.en)}" title="Speak">🔊</button></div>
+      <p class="ex-en" dir="ltr">${escapeHtml(ex.en)}</p>
+      <p class="ex-ar" dir="rtl">${escapeHtml(ex.ar || 'تعذر ترجمة المثال')}</p>
+      ${ex.note ? `<p class="ex-note" dir="rtl">💡 ${escapeHtml(ex.note)}</p>` : ''}
+    </div>`).join('');
   }
 
   // Accepts a single word OR a compound phrase (e.g. "wake up").
@@ -5231,21 +5262,35 @@ Return JSON ONLY, no extra text, in exactly this shape:
     • Surprise/sigh: write "oh my", "ugh", "ahh".
   Use them where a real speaker WOULD naturally hesitate or react. Never break the meaning. Do NOT use SSML, brackets, or asterisks — plain text only so every voice engine reads them.`
       : `- Keep speech clean and direct. No filler words or interjections.`;
-    return `You are an English teacher writing natural everyday dialogues for an Egyptian Arabic-speaking learner.
+    return `You are writing a short, realistic English dialogue that sounds like native everyday speech — the kind of lines you'd hear in a movie, a TV show, or a real conversation.
 
-WRITE a short, natural, REALISTIC English dialogue between TWO speakers (A and B) about a common everyday situation, that NATURALLY uses EVERY one of these target terms (in their natural inflected form is fine — e.g. "recommended" for "recommend"):
-
-TARGET TERMS:
+TARGET TERMS the learner wants to practice:
 ${list}
 
-REQUIREMENTS:
+CORE PRINCIPLES — follow strictly:
+1. The target terms must be used NATURALLY and ONLY when they fit the context.
+2. Never force a target term into a sentence just to make it appear.
+3. If a term feels unnatural in the situation you started with, CHANGE THE SITUATION to one where natives would actually use it.
+4. Prioritize natural conversation over vocabulary coverage. If covering every term ruins authenticity, prefer authenticity — but try hard to cover them all by picking the right situation first.
+5. Each line should sound like something a real person would actually say in daily life.
+6. Avoid textbook-style sentences and obvious vocabulary drills.
+7. Do not write anything a native speaker would find strange or awkward.
+8. If a target term is rare, formal, technical, or literary — pick the kind of context where natives WOULD use it (work meeting, news, dramatic moment) instead of pretending it's casual.
+9. Don't repeat any target term unnecessarily.
+10. The dialogue should feel authentic, spontaneous, conversational.
+
+PROCESS for each target term: first decide HOW native speakers actually use it, then build a situation around that usage, then write the line.
+
+FORMAT REQUIREMENTS:
 - ${turns} turns total, alternating A / B / A / B.
-- Conversational, not textbook. Use contractions and natural connectors ("yeah, well, actually, by the way…").
-- Every target term MUST appear at least once across the dialogue. It must feel natural, never forced.
+- Use contractions and natural connectors ("yeah, well, actually, by the way, look…").
+- Use the natural inflected form when needed (e.g. "recommended" not bare "recommend").
 ${fillersBlock}
-- Situation: ${situation || 'pick a believable daily situation that fits the words (café, work chat, calling a friend, planning a trip, asking for advice, family dinner, etc.)'}
-- For EACH line, give an Egyptian colloquial Arabic translation (المصرية الدارجة) — friendly, not formal MSA, no transliteration. Translate the meaning naturally; you don't need to keep the fillers in Arabic if they sound awkward.
+- Situation: ${situation || "you pick — choose the most believable everyday context for these particular terms (café, work chat, calling a friend, planning a trip, asking for advice, dating, family dinner, dramatic news, etc.)"}
+- For EACH line, an EGYPTIAN COLLOQUIAL ARABIC translation (المصرية الدارجة) — friendly, not formal MSA, no transliteration. Translate the meaning naturally; you don't need to keep fillers if they sound awkward in Arabic.
 - Keep each line short enough to say in one breath.
+
+Also produce one short ARABIC note PER target term explaining WHY that term sounds natural in the situation you built (one sentence, دارجة).
 
 Return JSON ONLY in this exact shape:
 {
@@ -5254,6 +5299,9 @@ Return JSON ONLY in this exact shape:
   "turns": [
     {"speaker": "A", "en": "...", "ar": "..."},
     {"speaker": "B", "en": "...", "ar": "..."}
+  ],
+  "target_notes": [
+    {"term": "<one of the target terms>", "note": "<short Arabic note explaining why it fits naturally here>"}
   ]
 }`;
   }
@@ -5516,6 +5564,9 @@ Return JSON ONLY in this exact shape:
     }).join('');
 
     const targetsBar = `<div class="d-targets">${(r.targets || []).map(t => `<span class="d-target-chip" dir="ltr">${escapeHtml(t.term)}</span>`).join('')}</div>`;
+    const notesHtml = (r.targetNotes && r.targetNotes.length)
+      ? `<details class="d-notes"><summary>💡 لماذا اختير هذا الموقف لكل كلمة</summary>${r.targetNotes.map(n => `<div class="d-note-row"><span class="d-note-term" dir="ltr">${escapeHtml(n.term)}</span><span class="d-note-text" dir="rtl">${escapeHtml(n.note)}</span></div>`).join('')}</details>`
+      : '';
 
     body.innerHTML = `
       <div class="d-result-head">
@@ -5524,6 +5575,7 @@ Return JSON ONLY in this exact shape:
       </div>
       ${r.situation ? `<div class="d-situation"><b>${escapeHtml(r.situation)}</b>${r.situation_ar ? `<p dir="rtl">${escapeHtml(r.situation_ar)}</p>` : ''}</div>` : ''}
       ${targetsBar}
+      ${notesHtml}
       <div class="d-dialogue">${turnsHtml}</div>
       <div class="d-result-foot">
         <button class="small-btn" data-d-regenerate>🔄 Regenerate</button>
@@ -5571,6 +5623,9 @@ Return JSON ONLY in this exact shape:
           en: cleanLine(t.en || ''),
           ar: cleanPuterArabicTranslation(t.ar || '')
         })),
+        targetNotes: Array.isArray(result.target_notes)
+          ? result.target_notes.map(n => ({ term: cleanLine(n?.term || ''), note: cleanLine(n?.note || '') })).filter(n => n.term && n.note)
+          : [],
         provider: s.provider
       };
       s.step = 'result';
