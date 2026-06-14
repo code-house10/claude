@@ -1473,8 +1473,8 @@ Usage in Arabic: ${cleanLine(template?.usageAr || '')}`;
     const seen = new Set();
     const push = ex => {
       const item = typeof ex === 'string'
-        ? { en: cleanLine(ex), ar: '', note: '' }
-        : { en: cleanLine(ex?.en || ''), ar: cleanLine(ex?.ar || ''), note: cleanLine(ex?.note || '') };
+        ? { en: cleanLine(ex), ar: '', note: '', alt: '' }
+        : { en: cleanLine(ex?.en || ''), ar: cleanLine(ex?.ar || ''), note: cleanLine(ex?.note || ''), alt: cleanLine(ex?.alt || '') };
       if (!item.en || looksLikeBadTemplateExample(item)) return;
       if (looksLikeTemplatePlaceholderArabic(item.ar)) item.ar = '';
       if (!/[.!?]$/.test(item.en)) item.en += '.';
@@ -1762,23 +1762,25 @@ CORE PRINCIPLES — follow strictly:
 8. If it expresses annoyance, the examples should sound naturally annoyed, not rude.
 9. Vary situations across the 3 examples (don't reuse the same scene).
 10. Replace every bracket placeholder like [do something], [someone], [somewhere] with realistic daily-life content. Never keep brackets.
+11. PREFER words and phrases native speakers actually use in everyday conversation (movies, casual chat). If the template OR any word inside an example is FORMAL, OUTDATED, or RARE in daily speech, you MUST explicitly flag that and provide a more common alternative natives would say instead — fill the "alt" field with that natural rewrite (e.g. for "I shall depart" → "I'm gonna head out"). For already-natural lines leave "alt" empty.
 
 For EACH example also write a one-line note (Arabic, دارجة) explaining WHY this template feels natural in that exact situation.
+The "alt" field is optional per example — fill it only when a more common everyday English alternative exists; otherwise use an empty string.
 
 Translations: natural EGYPTIAN COLLOQUIAL ARABIC (المصرية الدارجة), no formal MSA, no transliteration.
 
 Return JSON ONLY (no markdown, no commentary) in this exact shape:
 {"examples":[
-  {"en":"...", "ar":"...", "note":"..."},
-  {"en":"...", "ar":"...", "note":"..."},
-  {"en":"...", "ar":"...", "note":"..."}
+  {"en":"...", "ar":"...", "note":"...", "alt":""},
+  {"en":"...", "ar":"...", "note":"...", "alt":""},
+  {"en":"...", "ar":"...", "note":"...", "alt":""}
 ]}
 
 Good output example:
 {"examples":[
-  {"en":"Shouldn't you be at work by now?", "ar":"مش المفروض تكون في الشغل دلوقتي؟", "note":"موقف عتاب لطيف بين صحاب — طبيعي لما حد متأخر."},
-  {"en":"Shouldn't you be getting ready for class?", "ar":"مش المفروض تكون بتجهّز للحصة؟", "note":"أم بتنبّه ابنها — استخدام يومي شائع."},
-  {"en":"Shouldn't you be on your way to school?", "ar":"مش المفروض تكون في الطريق للمدرسة؟", "note":"موقف بيتي صباحي — جملة مألوفة جداً."}
+  {"en":"Shouldn't you be at work by now?", "ar":"مش المفروض تكون في الشغل دلوقتي؟", "note":"موقف عتاب لطيف بين صحاب — طبيعي لما حد متأخر.", "alt":""},
+  {"en":"Shouldn't you be getting ready for class?", "ar":"مش المفروض تكون بتجهّز للحصة؟", "note":"أم بتنبّه ابنها — استخدام يومي شائع.", "alt":""},
+  {"en":"Shouldn't you be on your way to school?", "ar":"مش المفروض تكون في الطريق للمدرسة؟", "note":"موقف بيتي صباحي — جملة مألوفة جداً.", "alt":""}
 ]}`;
   }
 
@@ -1798,6 +1800,7 @@ Good output example:
           en: cleanLine(x?.en || x?.english || ''),
           ar: cleanLine(x?.ar || x?.arabic || ''),
           note: cleanLine(x?.note || x?.why || ''),
+          alt: cleanLine(x?.alt || x?.alternative || ''),
           source: 'puter-ai'
         })), template.pattern, contextEn || template.source || '');
         if (examples.length >= 3) return examples.slice(0, 3);
@@ -1828,6 +1831,7 @@ Good output example:
       en: cleanLine(x?.en || x?.english || ''),
       ar: cleanLine(x?.ar || x?.arabic || ''),
       note: cleanLine(x?.note || x?.why || ''),
+      alt: cleanLine(x?.alt || x?.alternative || ''),
       source: 'openrouter-ai'
     })), template.pattern, contextEn || template.source || '').slice(0, 3);
   }
@@ -3835,18 +3839,20 @@ CORE PRINCIPLES — follow these strictly:
 7. Don't write something a native would find weird or stilted.
 8. Vary the situations — don't reuse the same scene 5 times.
 9. Use the natural inflected form when needed (e.g. "recommended", "recommendation" instead of bare "recommend").
+10. PREFER words and phrases that native speakers actually use in everyday conversation (movies, casual chat). If "${term}" itself is FORMAL, ACADEMIC, OUTDATED, or RARE in daily speech, you MUST explicitly say so AND give a more common alternative that natives would use instead — fill the "alt" field (e.g. for "endeavor" → "try"; for "commence" → "start"; for "purchase" → "buy"). For common conversational targets leave "alt" empty.
 
-For EACH example, ALSO write a one-line Arabic note (المصرية الدارجة) explaining WHY the word fits this exact situation — what context makes it sound natural here.
+For EACH example, ALSO write a one-line Arabic note (المصرية الدارجة) explaining WHY the word fits this exact situation.
+The "alt" field is optional per example — fill it only when a more common everyday alternative exists for the target word in that line; otherwise use an empty string.
 
 Translations must be NATURAL EGYPTIAN COLLOQUIAL ARABIC (المصرية الدارجة) — friendly, not formal MSA, no transliteration, no quotation marks.
 
 Return JSON ONLY, no other text:
 {"examples":[
-  {"en":"...","ar":"...","note":"..."},
-  {"en":"...","ar":"...","note":"..."},
-  {"en":"...","ar":"...","note":"..."},
-  {"en":"...","ar":"...","note":"..."},
-  {"en":"...","ar":"...","note":"..."}
+  {"en":"...","ar":"...","note":"...","alt":""},
+  {"en":"...","ar":"...","note":"...","alt":""},
+  {"en":"...","ar":"...","note":"...","alt":""},
+  {"en":"...","ar":"...","note":"...","alt":""},
+  {"en":"...","ar":"...","note":"...","alt":""}
 ]}`;
   }
 
@@ -3863,7 +3869,8 @@ Return JSON ONLY, no other text:
           .map(x => ({
             en: cleanLine(x?.en || x?.english || ''),
             ar: cleanPuterArabicTranslation(x?.ar || x?.arabic || ''),
-            note: cleanLine(x?.note || x?.why || x?.reason || '')
+            note: cleanLine(x?.note || x?.why || x?.reason || ''),
+            alt: cleanLine(x?.alt || x?.alternative || x?.commonAlt || '')
           }))
           .filter(x => x.en)
           .slice(0, 5);
@@ -3899,6 +3906,7 @@ Return JSON ONLY, no other text:
       <p class="ex-en" dir="ltr">${escapeHtml(ex.en)}</p>
       <p class="ex-ar" dir="rtl">${escapeHtml(ex.ar || 'تعذر ترجمة المثال')}</p>
       ${ex.note ? `<p class="ex-note" dir="rtl">💡 ${escapeHtml(ex.note)}</p>` : ''}
+      ${ex.alt ? `<div class="ex-alt"><span class="ex-alt-label">💬 Natives more often say</span><span class="ex-alt-text" dir="ltr">${escapeHtml(ex.alt)}</span><button class="ex-speak" data-speak-ex="${escapeHtml(ex.alt)}" title="Speak alternative">🔊</button></div>` : ''}
     </div>`).join('');
   }
 
@@ -5278,6 +5286,8 @@ CORE PRINCIPLES — follow strictly:
 8. If a target term is rare, formal, technical, or literary — pick the kind of context where natives WOULD use it (work meeting, news, dramatic moment) instead of pretending it's casual.
 9. Don't repeat any target term unnecessarily.
 10. The dialogue should feel authentic, spontaneous, conversational.
+11. PREFER words and phrases native speakers actually use in everyday conversation (movies, casual chat). The dialogue around the target terms must use the most common everyday wording, not formal vocabulary.
+12. If a TARGET term itself is FORMAL, OUTDATED, or RARE in daily speech, include that target in a context where natives WOULD use it AND in its target_notes entry fill the "alt" field with a more common alternative that natives normally say instead (e.g. for "endeavor" → "try"; for "purchase" → "buy"). For common conversational targets leave "alt" empty.
 
 PROCESS for each target term: first decide HOW native speakers actually use it, then build a situation around that usage, then write the line.
 
@@ -5301,7 +5311,7 @@ Return JSON ONLY in this exact shape:
     {"speaker": "B", "en": "...", "ar": "..."}
   ],
   "target_notes": [
-    {"term": "<one of the target terms>", "note": "<short Arabic note explaining why it fits naturally here>"}
+    {"term": "<one of the target terms>", "note": "<short Arabic note explaining why it fits naturally here>", "alt": "<more common everyday English alternative if the target is formal/rare, otherwise empty string>"}
   ]
 }`;
   }
@@ -5565,7 +5575,11 @@ Return JSON ONLY in this exact shape:
 
     const targetsBar = `<div class="d-targets">${(r.targets || []).map(t => `<span class="d-target-chip" dir="ltr">${escapeHtml(t.term)}</span>`).join('')}</div>`;
     const notesHtml = (r.targetNotes && r.targetNotes.length)
-      ? `<details class="d-notes"><summary>💡 لماذا اختير هذا الموقف لكل كلمة</summary>${r.targetNotes.map(n => `<div class="d-note-row"><span class="d-note-term" dir="ltr">${escapeHtml(n.term)}</span><span class="d-note-text" dir="rtl">${escapeHtml(n.note)}</span></div>`).join('')}</details>`
+      ? `<details class="d-notes"><summary>💡 لماذا اختير هذا الموقف لكل كلمة</summary>${r.targetNotes.map(n => `<div class="d-note-row">
+          <span class="d-note-term" dir="ltr">${escapeHtml(n.term)}</span>
+          ${n.note ? `<span class="d-note-text" dir="rtl">${escapeHtml(n.note)}</span>` : ''}
+          ${n.alt ? `<div class="d-note-alt"><span class="d-note-alt-label">💬 Natives more often say</span><span class="d-note-alt-text" dir="ltr">${escapeHtml(n.alt)}</span><button class="ex-speak" data-speak-ex="${escapeHtml(n.alt)}" title="Speak alternative">🔊</button></div>` : ''}
+        </div>`).join('')}</details>`
       : '';
 
     body.innerHTML = `
@@ -5624,7 +5638,11 @@ Return JSON ONLY in this exact shape:
           ar: cleanPuterArabicTranslation(t.ar || '')
         })),
         targetNotes: Array.isArray(result.target_notes)
-          ? result.target_notes.map(n => ({ term: cleanLine(n?.term || ''), note: cleanLine(n?.note || '') })).filter(n => n.term && n.note)
+          ? result.target_notes.map(n => ({
+              term: cleanLine(n?.term || ''),
+              note: cleanLine(n?.note || ''),
+              alt:  cleanLine(n?.alt  || n?.alternative || '')
+            })).filter(n => n.term && (n.note || n.alt))
           : [],
         provider: s.provider
       };
