@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-white-theme-v22';
-const ASSETS = ['./', './index.html', './style.css?v=white-theme-v22', './app.js?v=white-theme-v22', './vocab-data.js?v=white-theme-v22'];
+const CACHE_NAME = 'jungle-movie-pro-cache-v23';
+const ASSETS = ['./', './index.html', './style.css?v=pro-cache-v23', './app.js?v=pro-cache-v23', './vocab-data.js?v=pro-cache-v23'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

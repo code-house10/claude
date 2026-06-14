@@ -52,7 +52,11 @@
     cefrAdv: null,     // { word: 'B1'|'B2'|'C1'|'C2' } — advanced CEFR words
     advCount: 0,       // distinct advanced (orange) words in the current file
     savedWordSet: null,// Set of stems for already-saved words/phrases
-    savedCount: 0      // distinct already-saved words in the current file (pink)
+    savedCount: 0,     // distinct already-saved words in the current file (pink)
+    // Pro video cache + failover
+    coverageHit: new Set(),     // URLs that already crossed the auto-cache threshold this session
+    autoCacheBusy: false,       // dedupe parallel auto-cache attempts
+    failoverTried: new Set()    // URLs we've already tried to swap to cache after an error
   };
 
   const el = {
@@ -2574,6 +2578,102 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     } catch (e) {
       console.error(e);
       toast('Could not clear cache');
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // PRO VIDEO CACHE — auto-save once watched + silent failover
+  //
+  // 1. AUTO-CACHE  When the user has watched >= AUTO_CACHE_THRESHOLD of a
+  //    cacheable URL, we silently download the blob to IndexedDB (after a
+  //    one-time consent prompt). The user's "yes/no" is remembered forever
+  //    via localStorage so it never asks again.
+  //
+  // 2. FAILOVER    If the original URL errors out later (link expired,
+  //    server hiccup, CORS change), the player swaps to the cached blob
+  //    transparently. No interrupted lessons.
+  // ════════════════════════════════════════════════════════════════
+
+  const AUTO_CACHE_THRESHOLD = 0.80;
+  const AUTO_CACHE_CONSENT_KEY = 'jm_auto_cache_consent'; // 'ask' | 'yes' | 'no'
+
+  function getAutoCacheConsent() {
+    const v = localStorage.getItem(AUTO_CACHE_CONSENT_KEY);
+    return v === 'yes' || v === 'no' ? v : 'ask';
+  }
+  function setAutoCacheConsent(v) { localStorage.setItem(AUTO_CACHE_CONSENT_KEY, v); }
+
+  // Called on every timeupdate of the HTML5 video. Cheap: bails out fast for
+  // non-cacheable URLs and after the first hit per URL per session.
+  function checkAutoCacheThreshold() {
+    if (state.playerType !== 'html5') return;
+    if (state.usingCachedVideo) return;                // already on cache
+    if (state.autoCacheBusy) return;
+    const url = state.videoUrl;
+    if (!url || state.coverageHit.has(url)) return;
+    if (!isCacheableVideoUrl(url)) return;
+    const dur = el.movie.duration || 0;
+    if (!dur || !isFinite(dur)) return;
+    const pct = el.movie.currentTime / dur;
+    if (pct < AUTO_CACHE_THRESHOLD) return;
+    state.coverageHit.add(url);
+    triggerAutoCache(url).catch(e => console.warn('Auto-cache failed:', e));
+  }
+
+  async function triggerAutoCache(url) {
+    // Skip silently when the same URL is already cached.
+    try {
+      const existing = await getCachedVideo(url);
+      if (existing?.blob) { setStatus(`Already cached • ${humanSize(existing.size)}`); return; }
+    } catch {}
+
+    let consent = getAutoCacheConsent();
+    if (consent === 'no') return;
+    if (consent === 'ask') {
+      // One-time ask. Phrased so the user understands the recovery value.
+      const ok = confirm(
+        "You've watched most of this video.\n\n" +
+        "Save it on this device so it keeps working even if the link expires or the host has a hiccup?\n\n" +
+        "(Stored in your browser only. You can clear it any time from Menu → Video cache.)"
+      );
+      consent = ok ? 'yes' : 'no';
+      setAutoCacheConsent(consent);
+      if (!ok) return;
+    }
+
+    if (state.autoCacheBusy) return;
+    state.autoCacheBusy = true;
+    try {
+      setStatus('Auto-caching this video for offline / fallback…');
+      const blob = await fetchVideoBlobWithProgress(url);
+      await putCachedVideo(url, blob, { title: document.title, type: blob.type });
+      localStorage.setItem('jm_video_cache_url', url);
+      toast(`Cached for offline (${humanSize(blob.size)})`);
+      setStatus(`Auto-cached • ${humanSize(blob.size)}. If the link fails later, the player switches to your cache silently.`);
+    } catch (e) {
+      console.warn('Auto-cache failed', e);
+      setStatus('Auto-cache failed — the host may block CORS downloads. You can still cache manually from Menu → Video cache.');
+    } finally {
+      state.autoCacheBusy = false;
+    }
+  }
+
+  // Called when <video> fires an error. Tries to switch to a cached copy of
+  // the same URL once per URL per session, so a flaky link recovers seamlessly.
+  async function handleVideoFailover() {
+    if (state.playerType !== 'html5') return;
+    if (state.usingCachedVideo) return;
+    const url = state.videoUrl;
+    if (!url || state.failoverTried.has(url)) return;
+    state.failoverTried.add(url);
+    try {
+      const cached = await getCachedVideo(url);
+      if (!cached?.blob) return;       // nothing to fall back to
+      toast('Original link failed — switching to your cache');
+      setStatus('Original URL is not responding. Loading from your cache…');
+      await loadUrl(url, { useCache: true, forceCache: true, autoplay: true });
+    } catch (e) {
+      console.warn('Failover check failed', e);
     }
   }
 
@@ -5913,7 +6013,12 @@ Return JSON ONLY in this exact shape:
     openDict(term, -1);
   }
 
-  function openMenu(show=true) { el.menuSheet.classList.toggle('hidden', !show); }
+  function openMenu(show=true) {
+    el.menuSheet.classList.toggle('hidden', !show);
+    // Hide the floating menu button while the sheet is open so it doesn't
+    // poke through the backdrop. Re-shows after close.
+    const fab = $('fabMenuBtn'); if (fab) fab.style.display = show ? 'none' : '';
+  }
   function openModal(id) { $(id).classList.remove('hidden'); }
   function closeModal(id) {
     $(id).classList.add('hidden');
@@ -5937,6 +6042,11 @@ Return JSON ONLY in this exact shape:
       const v = TTS_VOICE_OPTIONS.find(x => x.id === tts.voice && x.engine === tts.provider) || TTS_VOICE_OPTIONS.find(x => x.engine === tts.provider) || TTS_VOICE_OPTIONS[0];
       vb.textContent = tts.provider === 'browser' ? '— OS default' : v.label.replace(/ \([FM][^)]*\)$/, '');
       vb.disabled = tts.provider === 'browser';
+    }
+    const acBtn = $('autoCacheBtn');
+    if (acBtn && typeof getAutoCacheConsent === 'function') {
+      const c = getAutoCacheConsent();
+      acBtn.textContent = c === 'yes' ? 'Always' : (c === 'no' ? 'Off' : 'Ask');
     }
   }
 
@@ -6196,6 +6306,16 @@ Return JSON ONLY in this exact shape:
   });
 
   $('menuBtn').onclick = () => openMenu(true); $('closeMenuBtn').onclick = () => openMenu(false); document.querySelector('.sheet-backdrop').onclick = () => openMenu(false);
+  // Floating menu button (bottom-left) — same handler, always within thumb reach.
+  if ($('fabMenuBtn')) $('fabMenuBtn').onclick = () => openMenu(true);
+  // Auto-cache consent toggle — cycles Ask → Yes → No → Ask.
+  if ($('autoCacheBtn')) $('autoCacheBtn').onclick = () => {
+    const cur = getAutoCacheConsent();
+    const next = cur === 'ask' ? 'yes' : (cur === 'yes' ? 'no' : 'ask');
+    setAutoCacheConsent(next);
+    updateControls();
+    toast(({ ask: 'Auto-cache: ask once', yes: 'Auto-cache: always on', no: 'Auto-cache: off' })[next]);
+  };
 
   // Menu search: live-filter buttons by label/text. Auto-expands any section
   // that contains a match and collapses ones that don't, so the user can scan
@@ -6426,6 +6546,9 @@ Return JSON ONLY in this exact shape:
   el.movie.addEventListener('waiting', () => { if (state.playerType === 'html5') setStatus('Buffering video...'); });
   el.movie.addEventListener('stalled', () => { if (state.playerType === 'html5') setStatus('Video stalled. Use Menu → Recover video if it does not resume.'); });
   el.movie.addEventListener('playing', () => { if (state.playerType === 'html5' && !state.isSeeking) setStatus('Playing'); });
+  // Pro cache hooks: time-based threshold trigger + error-based failover.
+  el.movie.addEventListener('timeupdate', checkAutoCacheThreshold);
+  el.movie.addEventListener('error', handleVideoFailover);
 
   state.savedWords = state.savedWords.map(normalizeSavedWord).filter(x => x.word && !isHiddenCloudSettingsItem(x));
   state.savedLines = state.savedLines.map(normalizeSavedLine);

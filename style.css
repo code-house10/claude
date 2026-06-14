@@ -519,6 +519,36 @@ button:active{transform:scale(.98)}
   .content{padding:10px 16px 48px}
 }
 
+/* ── Floating menu button (bottom-left, always reachable) ── */
+.fab-menu{
+  position:fixed;
+  left:calc(14px + env(safe-area-inset-left));
+  bottom:calc(14px + env(safe-area-inset-bottom));
+  z-index:60;
+  width:54px;height:54px;
+  border-radius:50%;
+  border:1px solid var(--border-strong);
+  background:#fff;color:var(--text);
+  font-size:24px;font-weight:900;line-height:1;
+  display:grid;place-items:center;
+  box-shadow:var(--shadow-lg);
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+  transition:transform .12s ease, box-shadow .18s ease, background-color .18s ease;
+}
+.fab-menu::after{
+  /* Tiny brand accent ring — keeps the brand cue without shouting */
+  content:'';position:absolute;inset:-3px;border-radius:50%;
+  background:linear-gradient(135deg,var(--brand),var(--accent));
+  z-index:-1;opacity:.16;
+}
+.fab-menu:hover{background:#f8fafc;transform:translateY(-1px);box-shadow:0 22px 50px rgba(15,23,42,.14),0 6px 14px rgba(15,23,42,.07)}
+.fab-menu:active{transform:scale(.96)}
+@media(min-width:700px){
+  /* Keep the FAB pinned to the centred app-shell on wide screens */
+  .fab-menu{left:calc(50% - 320px + 14px + env(safe-area-inset-left))}
+}
+
 /* ──────────────────────────────────────────────────────────────
    Light UX polish — smoother hovers, focus rings, consistent
    transitions across action buttons so the whole UI feels tighter.
