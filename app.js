@@ -5435,10 +5435,146 @@ Return JSON ONLY in this exact shape:
     </button>`;
   }
 
+  // ───── Autocomplete suggestions ─────
+  // Top-5 best matches that are NOT already selected. Ranks by:
+  //  1. Term starts with the query  (highest)
+  //  2. Term contains the query at a word boundary
+  //  3. Term contains the query anywhere
+  // Falls back to most-recently-saved.
+  function dialogueSuggestions(q, limit = 5) {
+    const s = state.dialogue;
+    const items = dialogueAvailableItems().filter(it => !s.selectedIds.has(it.id));
+    if (!q) return items.slice(0, limit);
+    const ql = q.toLowerCase();
+    const score = (it) => {
+      const t = it.term.toLowerCase();
+      if (t.startsWith(ql)) return 100 - Math.abs(t.length - ql.length);
+      if (new RegExp(`\\b${ql.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}`).test(t)) return 60;
+      if (t.includes(ql)) return 30;
+      if ((it.ar || '').includes(q)) return 15;
+      return 0;
+    };
+    return items
+      .map(it => ({ it, s: score(it) }))
+      .filter(x => x.s > 0)
+      .sort((a, b) => b.s - a.s)
+      .slice(0, limit)
+      .map(x => x.it);
+  }
+
+  function renderDialogueSuggest() {
+    const wrap = $('dSuggest');
+    if (!wrap) return;
+    const input = $('dSearch');
+    const focused = input && document.activeElement === input;
+    const s = state.dialogue;
+    const q = (s.search || '').trim();
+    // Show the panel when the input is focused. With no query we suggest the
+    // most-recently-saved items; with a query we suggest matches.
+    if (!focused) { wrap.classList.add('hidden'); return; }
+    const list = dialogueSuggestions(q, 6);
+    if (!list.length) {
+      wrap.classList.remove('hidden');
+      wrap.innerHTML = `<div class="d-sugg-empty">No matches in your saved items.</div>`;
+      return;
+    }
+    if (typeof s.suggestIdx !== 'number' || s.suggestIdx < 0 || s.suggestIdx >= list.length) s.suggestIdx = -1;
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = list.map((it, i) => `<button class="d-sugg-item${i===s.suggestIdx?' on':''}" data-d-sugg-add="${escapeHtml(it.id)}" tabindex="-1">
+      <span class="d-kind d-kind-${it.kind}">${it.kind==='line'?'📜':(it.kind==='phrase'?'💬':(it.kind==='template'?'📐':'🔤'))}</span>
+      <span class="d-sugg-term" dir="ltr">${escapeHtml(it.term.slice(0,50))}</span>
+      ${it.ar ? `<span class="d-sugg-ar" dir="rtl">${escapeHtml(it.ar.slice(0,28))}</span>` : ''}
+      <span class="d-sugg-add">+</span>
+    </button>`).join('');
+  }
+
+  // Keyboard handlers on the search input: ↑/↓ to move, Enter to add, Esc clears.
+  function handleDialogueSearchKeydown(e) {
+    const s = state.dialogue;
+    const list = dialogueSuggestions(s.search, 6);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      s.suggestIdx = list.length ? (s.suggestIdx + 1) % list.length : -1;
+      renderDialogueSuggest();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      s.suggestIdx = list.length ? (s.suggestIdx <= 0 ? list.length - 1 : s.suggestIdx - 1) : -1;
+      renderDialogueSuggest();
+    } else if (e.key === 'Enter') {
+      if (s.suggestIdx >= 0 && list[s.suggestIdx]) {
+        e.preventDefault();
+        addDialogueSuggestion(list[s.suggestIdx].id, /*clearSearch*/ true);
+      }
+    } else if (e.key === 'Escape') {
+      if (s.search) { s.search = ''; e.target.value = ''; s.suggestIdx = -1; renderDialoguePickerMain(); renderDialogueSuggest(); }
+      else { e.target.blur(); }
+    }
+  }
+
+  // Adds a suggestion to the selection while KEEPING the search input focused
+  // so the user can type the next term immediately.
+  function addDialogueSuggestion(id, clearSearch) {
+    const s = state.dialogue;
+    s.selectedIds.add(id);
+    if (clearSearch) { s.search = ''; const input = $('dSearch'); if (input) input.value = ''; }
+    s.suggestIdx = -1;
+    renderDialoguePickerMain();
+    renderDialogueSuggest();
+    const input = $('dSearch'); if (input) input.focus();
+  }
+
+  // SHELL renderer — builds the search input + filters + main wrapper ONCE.
+  // The search <input> never gets destroyed by subsequent renders, so typing
+  // keeps focus and the caret stays put naturally.
   function renderDialoguePicker(body) {
     const s = state.dialogue;
+    body.innerHTML = `
+      <div class="d-toolbar">
+        <div class="d-search-wrap">
+          <input id="dSearch" class="text-input d-search" type="search" placeholder="🔎 Search saved items…" autocomplete="off" />
+          <div id="dSuggest" class="d-suggest hidden"></div>
+        </div>
+        <div id="dFilters" class="d-filters"></div>
+      </div>
+      <div id="dPickerMain"></div>
+    `;
+    const input = body.querySelector('#dSearch');
+    input.value = s.search || '';
+    input.addEventListener('input', (e) => {
+      s.search = e.target.value;
+      s.suggestIdx = -1;
+      renderDialoguePickerFilters();
+      renderDialoguePickerMain();
+      renderDialogueSuggest();
+    });
+    input.addEventListener('focus', () => renderDialogueSuggest());
+    input.addEventListener('blur', () => {
+      // Delay so a click on a suggestion fires before the dropdown hides.
+      setTimeout(() => { const el = $('dSuggest'); if (el) el.classList.add('hidden'); }, 180);
+    });
+    input.addEventListener('keydown', handleDialogueSearchKeydown);
+    renderDialoguePickerFilters();
+    renderDialoguePickerMain();
+  }
+
+  // Re-rendered when the user changes filter kind (chip highlight only).
+  function renderDialoguePickerFilters() {
+    const s = state.dialogue;
+    const wrap = $('dFilters');
+    if (!wrap) return;
+    wrap.innerHTML = ['all','word','phrase','line']
+      .map(k => `<button class="d-filter${s.filterKind===k?' on':''}" data-d-filter="${k}">${k==='all'?'All':(k==='word'?'🔤 Words':(k==='phrase'?'💬 Phrases':'📜 Lines'))}</button>`)
+      .join('');
+  }
+
+  // MAIN renderer — recomputed on filter change, selection toggle, etc.
+  // Does NOT touch the search input or its container, so focus is preserved.
+  function renderDialoguePickerMain() {
+    const s = state.dialogue;
+    const main = $('dPickerMain');
+    if (!main) return;
     const all = dialogueAvailableItems();
-    const q = s.search.toLowerCase();
+    const q = (s.search || '').toLowerCase();
     const filtered = all.filter(it => {
       if (s.filterKind !== 'all' && it.kind !== s.filterKind) return false;
       if (!q) return true;
@@ -5459,13 +5595,7 @@ Return JSON ONLY in this exact shape:
     const sel = s.selectedIds.size;
     const histCount = dialogueHistory().length;
 
-    body.innerHTML = `
-      <div class="d-toolbar">
-        <input id="dSearch" class="text-input d-search" type="search" placeholder="🔎 Search saved items…" value="${escapeHtml(s.search)}" />
-        <div class="d-filters">
-          ${['all','word','phrase','line'].map(k => `<button class="d-filter${s.filterKind===k?' on':''}" data-d-filter="${k}">${k==='all'?'All':(k==='word'?'🔤 Words':(k==='phrase'?'💬 Phrases':'📜 Lines'))}</button>`).join('')}
-        </div>
-      </div>
+    main.innerHTML = `
       <div class="d-pick-summary">
         <b>${sel}</b> selected
         ${sel > 0 ? `<button class="small-btn" data-d-clear>Clear</button>` : ''}
@@ -5523,10 +5653,9 @@ Return JSON ONLY in this exact shape:
       </details>
       <button class="full-btn d-generate" ${sel === 0 ? 'disabled' : ''} data-d-generate>✨ Generate dialogue with ${sel} ${sel === 1 ? 'term' : 'terms'}</button>
     `;
-    // Live search input wiring
-    const search = body.querySelector('#dSearch');
-    if (search) search.oninput = (e) => { s.search = e.target.value; renderDialogue(); };
-    const sit = body.querySelector('#dSituation');
+    // Situation input is recreated whenever options re-render, so we attach
+    // its listener here every time. (Search lives in the shell — no rewire.)
+    const sit = main.querySelector('#dSituation');
     if (sit) sit.oninput = (e) => { s.situation = e.target.value; };
   }
 
@@ -5891,14 +6020,23 @@ Return JSON ONLY in this exact shape:
     if (e.target.closest('[data-open-connected]')) { closeModal('reductionModal'); showConnectedSpeech(); return; }
 
     // ── Dialogue practice ─────────────────────────────────────────
+    // Picker actions only update the dynamic main area + suggestion list, so
+    // the search input keeps focus and the caret while the user types.
+    const dPick = (typeof renderDialoguePickerMain === 'function')
+      ? () => { renderDialoguePickerMain(); renderDialogueSuggest(); }
+      : renderDialogue;
+    const dPickWithFilters = () => { dPick(); if (typeof renderDialoguePickerFilters === 'function') renderDialoguePickerFilters(); };
+
+    const dSuggAdd = e.target.closest('[data-d-sugg-add]');
+    if (dSuggAdd) { e.preventDefault(); addDialogueSuggestion(dSuggAdd.dataset.dSuggAdd, true); return; }
     const dTog = e.target.closest('[data-d-toggle]');
-    if (dTog) { const id = dTog.dataset.dToggle; const s = ensureDialogueState(); if (s.selectedIds.has(id)) s.selectedIds.delete(id); else s.selectedIds.add(id); renderDialogue(); return; }
-    const dFil = e.target.closest('[data-d-filter]'); if (dFil) { ensureDialogueState().filterKind = dFil.dataset.dFilter; renderDialogue(); return; }
-    if (e.target.closest('[data-d-clear]')) { ensureDialogueState().selectedIds.clear(); renderDialogue(); return; }
-    const dLen = e.target.closest('[data-d-length]'); if (dLen) { ensureDialogueState().length = dLen.dataset.dLength; renderDialogue(); return; }
-    const dProv = e.target.closest('[data-d-provider]'); if (dProv) { if (dProv.classList.contains('disabled')) { toast('Add an OpenRouter key in Settings first'); return; } ensureDialogueState().provider = dProv.dataset.dProvider; renderDialogue(); return; }
-    const dRate = e.target.closest('[data-d-rate]'); if (dRate) { ensureDialogueState().rate = Number(dRate.dataset.dRate) || 0.95; renderDialogue(); return; }
-    const dFill = e.target.closest('[data-d-fillers]'); if (dFill) { ensureDialogueState().naturalFillers = dFill.dataset.dFillers === '1'; renderDialogue(); return; }
+    if (dTog) { const id = dTog.dataset.dToggle; const s = ensureDialogueState(); if (s.selectedIds.has(id)) s.selectedIds.delete(id); else s.selectedIds.add(id); dPick(); return; }
+    const dFil = e.target.closest('[data-d-filter]'); if (dFil) { ensureDialogueState().filterKind = dFil.dataset.dFilter; dPickWithFilters(); return; }
+    if (e.target.closest('[data-d-clear]')) { ensureDialogueState().selectedIds.clear(); dPick(); return; }
+    const dLen = e.target.closest('[data-d-length]'); if (dLen) { ensureDialogueState().length = dLen.dataset.dLength; dPick(); return; }
+    const dProv = e.target.closest('[data-d-provider]'); if (dProv) { if (dProv.classList.contains('disabled')) { toast('Add an OpenRouter key in Settings first'); return; } ensureDialogueState().provider = dProv.dataset.dProvider; dPick(); return; }
+    const dRate = e.target.closest('[data-d-rate]'); if (dRate) { ensureDialogueState().rate = Number(dRate.dataset.dRate) || 0.95; dPick(); return; }
+    const dFill = e.target.closest('[data-d-fillers]'); if (dFill) { ensureDialogueState().naturalFillers = dFill.dataset.dFillers === '1'; dPick(); return; }
     // Voice cycling for speaker A / B — restricted to the active TTS engine.
     const dVoiceTest = e.target.closest('[data-d-voice-test]');
     if (dVoiceTest) {
@@ -5918,7 +6056,8 @@ Return JSON ONLY in this exact shape:
       const idx = pool.findIndex(v => v.id === curId);
       const next = pool[(idx + 1) % pool.length];
       if (sp === 'A') ds.voiceA = next.id; else ds.voiceB = next.id;
-      renderDialogue();
+      if (typeof renderDialoguePickerMain === 'function') renderDialoguePickerMain();
+      else renderDialogue();
       speakNatural(`Speaker ${sp} — ${next.id}.`, { voice: next.id, rate: ds.rate });
       return;
     }
