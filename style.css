@@ -547,6 +547,28 @@ button:active{transform:scale(.98)}
 .deck-due small{font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.4px;margin-top:1px}
 .deck-clear{color:#10b981;font-size:18px;font-weight:900}
 
+/* ── Resume session banner (cross-device review progress) ── */
+.resume-session-banner{background:linear-gradient(135deg,#eff6ff,#ecfdf5);border:2px solid #86efac;border-radius:var(--radius-lg);padding:16px;margin-bottom:12px;box-shadow:var(--shadow-sm);animation:resumeFadeIn .3s ease-out}
+@keyframes resumeFadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.resume-header{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.resume-icon{font-size:28px;line-height:1;flex:none;margin-top:2px}
+.resume-header b{display:block;font-size:16px;font-weight:900;color:var(--text);margin-bottom:3px}
+.resume-detail{margin:0;font-size:13px;font-weight:700;color:var(--text-mid);line-height:1.5}
+.resume-stats{margin-top:4px}
+.resume-stats small{font-size:12px;font-weight:800;color:var(--muted)}
+.resume-actions{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.resume-btn{background:linear-gradient(135deg,#10b981,#059669)!important;color:#fff!important;border:0!important;border-radius:12px!important;padding:13px 18px!important;font-size:15px!important;font-weight:900!important;box-shadow:0 6px 18px rgba(16,185,129,.3)!important;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.resume-btn:active{transform:scale(.98)}
+.resume-actions .small-btn{background:#fff;border:1px solid var(--border-strong);color:#991b1b;font-weight:800;border-radius:12px;padding:12px 14px;font-size:13px;white-space:nowrap}
+.resume-divider{border:none;border-top:1px dashed var(--border);margin:14px 0 8px}
+@media(max-width:420px){
+  .resume-session-banner{padding:13px}
+  .resume-icon{font-size:24px}
+  .resume-header b{font-size:14px}
+  .resume-actions{grid-template-columns:1fr;gap:7px}
+  .resume-btn{padding:12px 14px!important;font-size:14px!important}
+}
+
 /* ── Floating menu button (bottom-left, always reachable) ── */
 .fab-menu{
   position:fixed;

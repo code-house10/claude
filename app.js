@@ -3288,7 +3288,89 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   }
 
   function isHiddenCloudSettingsItem(item) {
-    return isLaraSettingsCloudItem(item) || isChatLlmSettingsCloudItem(item) || isOpenRouterSettingsCloudItem(item);
+    return isLaraSettingsCloudItem(item) || isChatLlmSettingsCloudItem(item) || isOpenRouterSettingsCloudItem(item) || isReviewProgressCloudItem(item);
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // REVIEW SESSION PROGRESS — persist & sync across devices
+  //
+  // Stores the current review session state (deck, remaining card
+  // keys, current index, session stats) as a hidden cloud settings
+  // item so it rides the existing saved-words sync pipeline.
+  // On showReviewCards(), if a saved session with remaining cards
+  // exists, the user is offered to resume where they left off.
+  // ════════════════════════════════════════════════════════════════
+  const REVIEW_PROGRESS_CLOUD_WORD = '__setting:review_progress__';
+
+  function isReviewProgressCloudItem(item) {
+    return item?.word === REVIEW_PROGRESS_CLOUD_WORD || item?.key === 'setting:review_progress';
+  }
+
+  function makeReviewProgressCloudItem(progress) {
+    const now = new Date().toISOString();
+    return {
+      kind: 'setting',
+      hidden: true,
+      key: 'setting:review_progress',
+      word: REVIEW_PROGRESS_CLOUD_WORD,
+      reviewProgress: progress,
+      savedAt: now,
+      updatedAt: now
+    };
+  }
+
+  function saveReviewProgress() {
+    if (!state.reviewQueue || !state.reviewQueue.length) {
+      // Session is done — clear saved progress
+      localStorage.removeItem('jm_review_progress');
+      return;
+    }
+    const progress = {
+      deckKey: state.reviewDeck || '__all__',
+      remainingCardKeys: state.reviewQueue.map(c => cardId(c)),
+      currentIndex: state.reviewIndex || 0,
+      savedAt: new Date().toISOString(),
+      sessionStats: state.smartSession ? {
+        startedAt: state.smartSession.startedAt,
+        counts: state.smartSession.counts,
+        grades: state.smartSession.grades,
+        totalRated: state.smartSession.totalRated
+      } : null
+    };
+    localStorage.setItem('jm_review_progress', JSON.stringify(progress));
+  }
+
+  function loadReviewProgress() {
+    // Try localStorage first, then check cloud item
+    try {
+      const local = JSON.parse(localStorage.getItem('jm_review_progress') || 'null');
+      if (local && local.remainingCardKeys?.length) return local;
+    } catch {}
+    // Check cloud items in savedWords
+    const cloudItem = state.savedWords.find(isReviewProgressCloudItem);
+    if (cloudItem?.reviewProgress?.remainingCardKeys?.length) return cloudItem.reviewProgress;
+    return null;
+  }
+
+  function clearReviewProgress() {
+    localStorage.removeItem('jm_review_progress');
+  }
+
+  function applyReviewProgressFromCloud(remoteWords = []) {
+    const item = (remoteWords || []).find(isReviewProgressCloudItem);
+    if (!item?.reviewProgress) return false;
+    const local = loadReviewProgress();
+    // Keep the most recent progress (cloud or local)
+    if (local && item.reviewProgress.savedAt) {
+      const localDate = new Date(local.savedAt || 0).getTime();
+      const cloudDate = new Date(item.reviewProgress.savedAt || 0).getTime();
+      if (cloudDate > localDate) {
+        localStorage.setItem('jm_review_progress', JSON.stringify(item.reviewProgress));
+      }
+    } else if (!local && item.reviewProgress.remainingCardKeys?.length) {
+      localStorage.setItem('jm_review_progress', JSON.stringify(item.reviewProgress));
+    }
+    return true;
   }
 
   function makeChatLlmSettingsCloudItem() {
@@ -3349,6 +3431,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       .map(normalizeSavedWord)
       .filter(x => x.word && !isHiddenCloudSettingsItem(x));
     const hiddenSettings = [makeLaraSettingsCloudItem(), makeChatLlmSettingsCloudItem(), makeOpenRouterSettingsCloudItem()].filter(Boolean);
+    // Include review progress in cloud sync
+    const progress = loadReviewProgress();
+    if (progress) hiddenSettings.push(makeReviewProgressCloudItem(progress));
     return [...visibleWords, ...hiddenSettings];
   }
 
@@ -4419,8 +4504,28 @@ Return JSON ONLY, no other text:
 
   function showReviewCards() {
     openMenu(false);
-    // Open the modal on the DECK PICKER step — the user chooses which movie/
-    // source to review (or "All"). Picking enters the actual review loop.
+    // Check for a saved session that can be resumed (from this device or synced from cloud)
+    const savedProgress = loadReviewProgress();
+    if (savedProgress && savedProgress.remainingCardKeys?.length) {
+      // Rebuild the queue from saved card keys — only include cards that still exist
+      const allItems = allReviewItems();
+      const itemMap = new Map(allItems.map(c => [cardId(c), c]));
+      const remaining = savedProgress.remainingCardKeys
+        .map(k => itemMap.get(k))
+        .filter(Boolean);
+      if (remaining.length > 0) {
+        // Show resume prompt
+        state.reviewDeck = null;
+        $('savedTitle').textContent = 'Review decks';
+        renderReviewDecksWithResume(savedProgress, remaining.length);
+        openModal('savedModal');
+        return;
+      } else {
+        // Saved session cards are all gone (already reviewed or deleted)
+        clearReviewProgress();
+      }
+    }
+    // No saved session — show normal deck picker
     state.reviewDeck = null;
     $('savedTitle').textContent = 'Review decks';
     renderReviewDecks();
@@ -4440,6 +4545,9 @@ Return JSON ONLY, no other text:
       ? 'All decks'
       : (reviewDecks().find(d => d.key === state.reviewDeck)?.label || 'Deck');
     $('savedTitle').textContent = `Review · ${deckLabel}`;
+    // Save initial session progress for cross-device resume
+    saveReviewProgress();
+    scheduleCloudLibrarySync();
     renderReviewCard();
   }
 
@@ -4475,6 +4583,112 @@ Return JSON ONLY, no other text:
         ${decks.map(renderDeck).join('')}
       </div>
     `;
+  }
+
+  // Variant of renderReviewDecks that shows a resume banner at the top.
+  function renderReviewDecksWithResume(savedProgress, remainingCount) {
+    const body = $('savedBody');
+    const deckKey = savedProgress.deckKey || '__all__';
+    const deckLabel = deckKey === '__all__'
+      ? 'All decks'
+      : (reviewDecks().find(d => d.key === deckKey)?.label || deckKey);
+    const savedTime = savedProgress.savedAt
+      ? new Date(savedProgress.savedAt).toLocaleString()
+      : '';
+    const stats = savedProgress.sessionStats;
+    const statsHtml = stats && stats.totalRated > 0
+      ? `<div class="resume-stats"><small>📊 Rated: ${stats.totalRated} · ✅ Good: ${(stats.grades?.good || 0) + (stats.grades?.easy || 0)} · 🔁 Again: ${stats.grades?.again || 0}</small></div>`
+      : '';
+
+    const resumeBanner = `
+      <div class="resume-session-banner">
+        <div class="resume-header">
+          <span class="resume-icon">⏸️</span>
+          <div>
+            <b>جلسة مراجعة متوقفة</b>
+            <p class="resume-detail">📽️ ${escapeHtml(deckLabel)} · ${remainingCount} بطاقة متبقية${savedTime ? ` · ${savedTime}` : ''}</p>
+            ${statsHtml}
+          </div>
+        </div>
+        <div class="resume-actions">
+          <button class="full-btn resume-btn" data-resume-review>▶️ استكمال المراجعة</button>
+          <button class="small-btn" data-discard-review>🗑️ بدء من جديد</button>
+        </div>
+      </div>
+    `;
+
+    // Also render the normal decks below the resume banner
+    const decks = reviewDecks();
+    const totalDue = decks.reduce((n, d) => n + d.due, 0);
+    const renderDeck = (d) => `<button class="deck-row${d.due ? '' : ' is-empty'}" data-review-start-deck="${escapeHtml(d.key)}" ${d.due ? '' : 'disabled'}>
+      <div class="deck-icon">📽️</div>
+      <div class="deck-main">
+        <div class="deck-name" dir="ltr">${escapeHtml(d.label)}</div>
+        <div class="deck-meta">${d.total} card${d.total === 1 ? '' : 's'} saved</div>
+      </div>
+      <div class="deck-due">${d.due > 0 ? `<b>${d.due}</b><small>due now</small>` : `<span class="deck-clear">✓</span>`}</div>
+    </button>`;
+
+    body.innerHTML = resumeBanner + `
+      <hr class="resume-divider">
+      <p class="hint-small">أو اختر deck جديد:</p>
+      <div class="deck-list">
+        ${totalDue > 0 ? `<button class="deck-row deck-row-all" data-review-start-deck="__all__">
+          <div class="deck-icon">🎬</div>
+          <div class="deck-main">
+            <div class="deck-name">All decks</div>
+            <div class="deck-meta">Mixed review across every movie</div>
+          </div>
+          <div class="deck-due"><b>${totalDue}</b><small>due now</small></div>
+        </button>` : ''}
+        ${decks.map(renderDeck).join('')}
+      </div>
+    `;
+  }
+
+  function resumeReviewSession() {
+    const savedProgress = loadReviewProgress();
+    if (!savedProgress || !savedProgress.remainingCardKeys?.length) {
+      toast('لا توجد جلسة محفوظة');
+      showReviewCards();
+      return;
+    }
+    // Rebuild queue from saved keys
+    const allItems = allReviewItems();
+    const itemMap = new Map(allItems.map(c => [cardId(c), c]));
+    const remaining = savedProgress.remainingCardKeys
+      .map(k => itemMap.get(k))
+      .filter(Boolean);
+    if (!remaining.length) {
+      toast('البطاقات المحفوظة تمت مراجعتها بالفعل');
+      clearReviewProgress();
+      showReviewCards();
+      return;
+    }
+    // Restore session state
+    state.reviewDeck = savedProgress.deckKey || '__all__';
+    state.reviewQueue = remaining;
+    state.reviewIndex = Math.min(savedProgress.currentIndex || 0, remaining.length - 1);
+    state.reviewRevealed = false;
+    state.reviewTyped = '';
+    state.reviewFeedback = '';
+    // Restore session stats if available
+    if (savedProgress.sessionStats) {
+      ensureSessionState(true);
+      state.smartSession.startedAt = savedProgress.sessionStats.startedAt || Date.now();
+      state.smartSession.counts = savedProgress.sessionStats.counts || state.smartSession.counts;
+      state.smartSession.grades = savedProgress.sessionStats.grades || state.smartSession.grades;
+      state.smartSession.totalRated = savedProgress.sessionStats.totalRated || 0;
+    } else {
+      ensureSessionState(true);
+    }
+    state.smartSession.queueIds = state.reviewQueue.map(cardId);
+    const deckLabel = state.reviewDeck === '__all__'
+      ? 'All decks'
+      : (reviewDecks().find(d => d.key === state.reviewDeck)?.label || 'Deck');
+    $('savedTitle').textContent = `Review · ${deckLabel}`;
+    renderReviewCard();
+    toast(`تم استكمال المراجعة · ${remaining.length} بطاقة متبقية`);
   }
 
   function showSingleReviewCard(type, index) {
@@ -4527,6 +4741,9 @@ Return JSON ONLY, no other text:
     }
     const due = state.reviewQueue;
     if (!due.length) {
+      // All cards done — clear saved progress so resume banner won't appear
+      clearReviewProgress();
+      scheduleCloudLibrarySync();
       const s = state.smartSession;
       const stats = s && s.totalRated > 0
         ? `<div class="session-summary">
@@ -4806,6 +5023,8 @@ Return JSON ONLY, no other text:
     state.savedLines = state.savedLines.map(normalizeSavedLine);
     writeJSON('jm_saved_words', state.savedWords);
     writeJSON('jm_saved_lines', state.savedLines);
+    // Save review session progress after each grading for cross-device resume
+    saveReviewProgress();
     scheduleCloudLibrarySync();
 
     // Re-queueing: Again cards bubble back into THIS session 3–5 slots ahead
@@ -4894,6 +5113,7 @@ Return JSON ONLY, no other text:
         const restoredLara = applyLaraSettingsFromCloud(remoteWordsRaw);
         const restoredChatLlm = applyChatLlmSettingsFromCloud(remoteWordsRaw);
         const restoredOpenRouter = applyOpenRouterSettingsFromCloud(remoteWordsRaw);
+        applyReviewProgressFromCloud(remoteWordsRaw);
         const remoteWords = remoteWordsRaw.filter(x => !isHiddenCloudSettingsItem(x));
         if (merge) {
           state.savedLines = mergeByKey(state.savedLines, remoteLines, savedLineMergeKey, normalizeSavedLine);
@@ -6501,8 +6721,10 @@ Return JSON ONLY in this exact shape:
       return;
     }
     const deckStart = e.target.closest('[data-review-start-deck]');
-    if (deckStart) { startReviewSession(deckStart.dataset.reviewStartDeck); return; }
-    if (e.target.closest('[data-review-back-to-decks]')) { showReviewCards(); return; }
+    if (deckStart) { clearReviewProgress(); startReviewSession(deckStart.dataset.reviewStartDeck); return; }
+    if (e.target.closest('[data-review-back-to-decks]')) { clearReviewProgress(); scheduleCloudLibrarySync(); showReviewCards(); return; }
+    if (e.target.closest('[data-resume-review]')) { resumeReviewSession(); return; }
+    if (e.target.closest('[data-discard-review]')) { clearReviewProgress(); scheduleCloudLibrarySync(); renderReviewDecks(); return; }
     if (e.target.closest('[data-show-saved-lines]')) { showSaved('lines'); return; }
     if (!e.target.closest('.line-action-menu')) hideLineActionMenus();
     if (e.target.matches('[data-close-modal]')) closeModal(e.target.dataset.closeModal);
