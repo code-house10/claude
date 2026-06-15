@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-anki-decks-v24';
-const ASSETS = ['./', './index.html', './style.css?v=anki-decks-v24', './app.js?v=anki-decks-v24', './vocab-data.js?v=anki-decks-v24'];
+const CACHE_NAME = 'jungle-movie-cross-device-resume-v25';
+const ASSETS = ['./', './index.html', './style.css?v=cross-device-resume-v25', './app.js?v=cross-device-resume-v25', './vocab-data.js?v=cross-device-resume-v25'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

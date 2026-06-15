@@ -2424,13 +2424,25 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       const chosen = incomingDate >= existingDate
         ? { ...existing, ...normalized }
         : { ...normalized, ...existing };
-      // Preserve review metadata conservatively so progress is not lost.
+      // Preserve learning effort counters conservatively (never lose count).
       chosen.reviewCount = Math.max(Number(existing.reviewCount || 0), Number(normalized.reviewCount || 0));
+      chosen.lapses = Math.max(Number(existing.lapses || 0), Number(normalized.lapses || 0));
       chosen.knownCount = Math.max(Number(existing.knownCount || 0), Number(normalized.knownCount || 0));
-      const dueA = existing.dueAt ? Date.parse(existing.dueAt) : 0;
-      const dueB = normalized.dueAt ? Date.parse(normalized.dueAt) : 0;
-      if (dueA && dueB) chosen.dueAt = dueA <= dueB ? existing.dueAt : normalized.dueAt;
-      else chosen.dueAt = existing.dueAt || normalized.dueAt || chosen.dueAt;
+      // CROSS-DEVICE SRS: the SCHEDULE must come from whichever device reviewed
+      // the card most recently (latest lastReviewedAt). The earlier-dueAt rule
+      // used before was wrong — it made a card already reviewed on device A keep
+      // device B's stale "due now", replaying it. Copy the full scheduling block
+      // from the most-recently-reviewed side.
+      const lastA = existing.lastReviewedAt ? Date.parse(existing.lastReviewedAt) : 0;
+      const lastB = normalized.lastReviewedAt ? Date.parse(normalized.lastReviewedAt) : 0;
+      const sched = (lastB >= lastA) ? normalized : existing;
+      if (sched.dueAt) chosen.dueAt = sched.dueAt;
+      if (sched.phase) chosen.phase = sched.phase;
+      chosen.learningStep = Number(sched.learningStep || 0);
+      chosen.intervalDays = Number(sched.intervalDays || chosen.intervalDays || 0);
+      chosen.ease = Number(sched.ease || chosen.ease || 2.5);
+      chosen.lastReviewedAt = sched.lastReviewedAt || chosen.lastReviewedAt || '';
+      chosen.lastRating = sched.lastRating || chosen.lastRating || '';
       map.set(key, chosen);
     };
     (remoteArr || []).forEach(x => put(x, 'remote'));
@@ -4502,8 +4514,17 @@ Return JSON ONLY, no other text:
 
   function cardId(card) { return `${card.type}:${card.key}`; }
 
-  function showReviewCards() {
+  async function showReviewCards() {
     openMenu(false);
+    // Pull the latest progress from the cloud FIRST, so a session reviewed on
+    // another device is reflected here before we decide what to resume. We
+    // show a tiny syncing state and never block on failure (offline = use local).
+    $('savedTitle').textContent = 'Review decks';
+    $('savedBody').innerHTML = `<div class="review-empty"><b>⏳ Syncing your latest review progress…</b><p class="hint-small">Checking other devices</p></div>`;
+    openModal('savedModal');
+    try { await loadSavedItemsFromCloud({ silent: true, merge: true }); } catch {}
+    rebuildSavedWordSet();
+
     // Check for a saved session that can be resumed (from this device or synced from cloud)
     const savedProgress = loadReviewProgress();
     if (savedProgress && savedProgress.remainingCardKeys?.length) {
@@ -5023,9 +5044,6 @@ Return JSON ONLY, no other text:
     state.savedLines = state.savedLines.map(normalizeSavedLine);
     writeJSON('jm_saved_words', state.savedWords);
     writeJSON('jm_saved_lines', state.savedLines);
-    // Save review session progress after each grading for cross-device resume
-    saveReviewProgress();
-    scheduleCloudLibrarySync();
 
     // Re-queueing: Again cards bubble back into THIS session 3–5 slots ahead
     // so the user actually re-sees them (proper SRS behaviour).
@@ -5040,6 +5058,12 @@ Return JSON ONLY, no other text:
       // Keep the same index — splice shifts the next card into our slot.
       if (state.reviewIndex >= state.reviewQueue.length) state.reviewIndex = 0;
     }
+
+    // Persist progress AFTER the queue mutation so the saved "remaining" list
+    // and index reflect what's actually left — the card just graded is gone,
+    // so resuming on another device won't replay it.
+    saveReviewProgress();
+    scheduleCloudLibrarySync();
 
     state.reviewRevealed = false;
     state.reviewTyped = '';
