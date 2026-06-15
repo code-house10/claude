@@ -56,7 +56,10 @@
     // Pro video cache + failover
     coverageHit: new Set(),     // URLs that already crossed the auto-cache threshold this session
     autoCacheBusy: false,       // dedupe parallel auto-cache attempts
-    failoverTried: new Set()    // URLs we've already tried to swap to cache after an error
+    failoverTried: new Set(),   // URLs we've already tried to swap to cache after an error
+    // Lesson tag — used to group saved items into per-movie review decks.
+    lessonTitle: localStorage.getItem('jm_lesson_title') || '',
+    reviewDeck: null            // active deck filter inside Review cards
   };
 
   const el = {
@@ -91,6 +94,26 @@
   function parseTime(t) { if (!t) return 0; const p = String(t).replace(',', '.').trim().split(':').map(Number); if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2]; if (p.length === 2) return p[0]*60 + p[1]; return p[0] || 0; }
   function secondsToSrtTime(total) { const ms = Math.round((total - Math.floor(total)) * 1000); const t = Math.max(0, Math.floor(total)); const h = Math.floor(t/3600); const m = Math.floor((t%3600)/60); const s = t%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(ms).padStart(3,'0')}`; }
   function tokenize(text) { return cleanLine(text).match(/[A-Za-zÀ-ÿ0-9]+(?:[-'][A-Za-zÀ-ÿ0-9]+)*/g) || []; }
+
+  // Friendly lesson tag derived from a URL path or filename. Drops query
+  // strings and extensions, decodes %20, trims to a reasonable length.
+  function deriveLessonTitle(input) {
+    const raw = String(input || '').trim();
+    if (!raw) return '';
+    try {
+      const u = raw.startsWith('http') ? new URL(raw) : null;
+      const base = (u ? u.pathname.split('/').filter(Boolean).pop() : raw.split(/[\\/]/).pop()) || '';
+      const dec = decodeURIComponent(base).replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[._-]+/g, ' ').trim();
+      return dec.slice(0, 80) || (u ? u.hostname : raw);
+    } catch { return raw.slice(0, 80); }
+  }
+
+  function setLessonTitle(title) {
+    const t = cleanLine(title);
+    if (!t) return;
+    state.lessonTitle = t;
+    try { localStorage.setItem('jm_lesson_title', t); } catch {}
+  }
   function playphraseUrl(q) { return `https://www.playphrase.me/#/search?q=${encodeURIComponent(q).replace(/%20/g, '+')}`; }
   function openPlayPhrase(q) { if (!q) return; window.open(playphraseUrl(q), '_blank', 'noopener,noreferrer'); }
 
@@ -2316,12 +2339,17 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       ...line,
       key: line.key || lineKey(line),
       ar: line.ar || '',
+      sourceTitle: cleanLine(line.sourceTitle || ''),
       savedAt: line.savedAt || now,
       dueAt: line.dueAt || now,
+      phase: line.phase || (Number(line.intervalDays) > 0 ? 'review' : 'learning'),
+      learningStep: Number(line.learningStep || 0),
       intervalDays: Number(line.intervalDays || 0),
       ease: Number(line.ease || 2.5),
       reviewCount: Number(line.reviewCount || 0),
-      lastReviewedAt: line.lastReviewedAt || ''
+      lapses: Number(line.lapses || 0),
+      lastReviewedAt: line.lastReviewedAt || '',
+      lastRating: line.lastRating || ''
     };
   }
 
@@ -2345,13 +2373,19 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       contextAr: word.contextAr || '',
       examples: Array.isArray(word.examples) ? word.examples : [],
       sourceLineKey: word.sourceLineKey || '',
+      sourceTitle: cleanLine(word.sourceTitle || ''),
       startTime: Number(word.startTime || 0),
       savedAt: word.savedAt || now,
       dueAt: word.dueAt || now,
+      // SRS phase fields (Anki-style learning steps in m/h, then review in d).
+      phase: word.phase || (Number(word.intervalDays) > 0 ? 'review' : 'learning'),
+      learningStep: Number(word.learningStep || 0),
       intervalDays: Number(word.intervalDays || 0),
       ease: Number(word.ease || 2.5),
       reviewCount: Number(word.reviewCount || 0),
-      lastReviewedAt: word.lastReviewedAt || ''
+      lapses: Number(word.lapses || 0),
+      lastReviewedAt: word.lastReviewedAt || '',
+      lastRating: word.lastRating || ''
     };
   }
 
@@ -3807,7 +3841,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     const contextEn = cleanLine(item.en);
     const contextAr = item.ar || '';
     const ar = await translatePhraseInContext(phrase, contextEn);
-    saveWord(phrase, ar, { kind: 'phrase', contextEn, contextAr, sourceLineKey: lineKey(item), startTime: item.startTime || 0 });
+    saveWord(phrase, ar, { kind: 'phrase', contextEn, contextAr, sourceLineKey: lineKey(item), startTime: item.startTime || 0, sourceTitle: state.lessonTitle || '' });
     setStatus('Phrase saved for smart review');
   }
 
@@ -3840,6 +3874,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       contextEn,
       contextAr,
       sourceLineKey: lineKey(item),
+      sourceTitle: state.lessonTitle || '',
       startTime: item.startTime || 0,
       templateSlot: naturalTemplate.slot || '',
       templateUsageEn: naturalTemplate.usageEn || '',
@@ -3871,6 +3906,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
         contextEn: cleanLine(item.en),
         contextAr: item.ar || '',
         sourceLineKey: lineKey(item),
+        sourceTitle: state.lessonTitle || '',
         startTime: item.startTime || 0,
         templateSlot: naturalTemplate.slot || '',
         templateUsageEn: naturalTemplate.usageEn || '',
@@ -3898,7 +3934,7 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     }
     const existing = state.savedLines.find(x => x.key === key);
     if (existing) { existing.ar = existing.ar || ar; toast('Line already saved'); }
-    else state.savedLines.unshift(normalizeSavedLine({...item, ar, key, savedAt:new Date().toISOString()}));
+    else state.savedLines.unshift(normalizeSavedLine({...item, ar, key, savedAt:new Date().toISOString(), sourceTitle: state.lessonTitle || ''}));
     writeJSON('jm_saved_lines', state.savedLines); debounceSave(); toast('Line saved'); scheduleCloudLibrarySync();
   }
   async function copyLine(idx) {
@@ -4054,6 +4090,7 @@ Return JSON ONLY, no other text:
       kind: isPhrase ? 'phrase' : 'word',
       contextEn, contextAr: item?.ar || '',
       sourceLineKey: item ? lineKey(item) : '',
+      sourceTitle: state.lessonTitle || '',
       startTime: item?.startTime || 0,
       examples: state.currentDictExamples || []
     });
@@ -4149,17 +4186,43 @@ Return JSON ONLY, no other text:
     return `${Math.ceil(hrs/24)}d`;
   }
 
-  function getDueReviewCards() {
+  function getDueReviewCards(filterDeck) {
     state.savedLines = state.savedLines.map(normalizeSavedLine);
     state.savedWords = state.savedWords.map(normalizeSavedWord).filter(x => x.word);
     const now = Date.now();
+    const matchDeck = (item) => {
+      if (!filterDeck || filterDeck === '__all__') return true;
+      const t = (item.sourceTitle || '').trim() || '__none__';
+      return t === filterDeck;
+    };
     const lineCards = state.savedLines
-      .filter(x => new Date(x.dueAt || 0).getTime() <= now)
+      .filter(x => new Date(x.dueAt || 0).getTime() <= now && matchDeck(x))
       .map(x => ({ type: 'line', key: x.key, item: x }));
     const wordCards = state.savedWords
-      .filter(x => new Date(x.dueAt || 0).getTime() <= now)
+      .filter(x => new Date(x.dueAt || 0).getTime() <= now && matchDeck(x))
       .map(x => ({ type: 'word', key: x.key || wordKey(x.word), item: x }));
     return [...wordCards, ...lineCards].sort((a, b) => new Date(a.item.dueAt || 0) - new Date(b.item.dueAt || 0));
+  }
+
+  // Group ALL saved items (due or not) by their sourceTitle, with due counts.
+  // Returns [{ key, label, due, total }] sorted by due count desc.
+  function reviewDecks() {
+    state.savedLines = state.savedLines.map(normalizeSavedLine);
+    state.savedWords = state.savedWords.map(normalizeSavedWord).filter(x => x.word);
+    const now = Date.now();
+    const map = new Map();
+    const bump = (item) => {
+      const raw = (item.sourceTitle || '').trim();
+      const key = raw || '__none__';
+      const label = raw || 'Other (no movie tagged)';
+      const ent = map.get(key) || { key, label, due: 0, total: 0 };
+      ent.total++;
+      if (new Date(item.dueAt || 0).getTime() <= now) ent.due++;
+      map.set(key, ent);
+    };
+    state.savedWords.forEach(bump);
+    state.savedLines.forEach(bump);
+    return [...map.values()].sort((a, b) => (b.due - a.due) || (b.total - a.total) || a.label.localeCompare(b.label));
   }
 
   function allReviewItems() {
@@ -4356,16 +4419,62 @@ Return JSON ONLY, no other text:
 
   function showReviewCards() {
     openMenu(false);
-    state.reviewQueue = getDueReviewCards();
+    // Open the modal on the DECK PICKER step — the user chooses which movie/
+    // source to review (or "All"). Picking enters the actual review loop.
+    state.reviewDeck = null;
+    $('savedTitle').textContent = 'Review decks';
+    renderReviewDecks();
+    openModal('savedModal');
+  }
+
+  function startReviewSession(deckKey) {
+    state.reviewDeck = deckKey || '__all__';
+    state.reviewQueue = getDueReviewCards(state.reviewDeck);
     state.reviewIndex = 0;
     state.reviewRevealed = false;
     state.reviewTyped = '';
     state.reviewFeedback = '';
     ensureSessionState(true);
     state.smartSession.queueIds = state.reviewQueue.map(cardId);
-    $('savedTitle').textContent = 'Smart review cards';
+    const deckLabel = state.reviewDeck === '__all__'
+      ? 'All decks'
+      : (reviewDecks().find(d => d.key === state.reviewDeck)?.label || 'Deck');
+    $('savedTitle').textContent = `Review · ${deckLabel}`;
     renderReviewCard();
-    openModal('savedModal');
+  }
+
+  // Decks list shown when the user first opens Review cards. Each entry is one
+  // saved-from-movie group with a due/total count and a Start button.
+  function renderReviewDecks() {
+    const body = $('savedBody');
+    const decks = reviewDecks();
+    const totalDue = decks.reduce((n, d) => n + d.due, 0);
+    if (!decks.length) {
+      body.innerHTML = `<div class="review-empty"><b>No saved cards yet</b><p>Save words, phrases, or lines while watching to build your decks.</p></div>`;
+      return;
+    }
+    const renderDeck = (d) => `<button class="deck-row${d.due ? '' : ' is-empty'}" data-review-start-deck="${escapeHtml(d.key)}" ${d.due ? '' : 'disabled'}>
+      <div class="deck-icon">📽️</div>
+      <div class="deck-main">
+        <div class="deck-name" dir="ltr">${escapeHtml(d.label)}</div>
+        <div class="deck-meta">${d.total} card${d.total === 1 ? '' : 's'} saved</div>
+      </div>
+      <div class="deck-due">${d.due > 0 ? `<b>${d.due}</b><small>due now</small>` : `<span class="deck-clear">✓</span>`}</div>
+    </button>`;
+    body.innerHTML = `
+      <p class="hint-small">Pick a movie / series to start reviewing — each deck holds the words, phrases and lines you saved from it.</p>
+      <div class="deck-list">
+        ${totalDue > 0 ? `<button class="deck-row deck-row-all" data-review-start-deck="__all__">
+          <div class="deck-icon">🎬</div>
+          <div class="deck-main">
+            <div class="deck-name">All decks</div>
+            <div class="deck-meta">Mixed review across every movie</div>
+          </div>
+          <div class="deck-due"><b>${totalDue}</b><small>due now</small></div>
+        </button>` : ''}
+        ${decks.map(renderDeck).join('')}
+      </div>
+    `;
   }
 
   function showSingleReviewCard(type, index) {
@@ -4429,7 +4538,7 @@ Return JSON ONLY, no other text:
         : '';
       const all = allReviewItems().sort((a,b)=>new Date(a.item.dueAt)-new Date(b.item.dueAt));
       const next = all[0]?.item;
-      body.innerHTML = `<div class="review-empty"><b>All cards reviewed ✅</b>${stats}<p>Next review: ${formatDue(next?.dueAt)}</p><button class="small-btn" data-show-saved-lines>Open saved lines</button></div>`;
+      body.innerHTML = `<div class="review-empty"><b>All cards reviewed ✅</b>${stats}<p>Next review: ${formatDue(next?.dueAt)}</p><div class="review-empty-actions"><button class="small-btn" data-review-back-to-decks>← Back to decks</button><button class="small-btn" data-show-saved-lines>Open saved lines</button></div></div>`;
       return;
     }
 
@@ -4504,7 +4613,11 @@ Return JSON ONLY, no other text:
     body.innerHTML = `${renderSmartSessionStats()}
       ${renderSmartSettingsPanel()}
       <div class="review-card" data-review-key="${escapeHtml(card.key)}" data-review-type="${card.type}" data-review-mode="${mode}" data-answer="${escapeHtml(answerHint)}">
-        <div class="review-count">${state.reviewIndex + 1} / ${due.length} due · ${badge} · <span class="mode-tag">${modeLabel}</span></div>
+        <div class="review-count">
+          <button class="review-back-btn" data-review-back-to-decks title="Back to decks">←</button>
+          <span>${state.reviewIndex + 1} / ${due.length} due · ${badge} · <span class="mode-tag">${modeLabel}</span></span>
+          ${item.sourceTitle ? `<span class="review-source" dir="ltr" title="Saved from ${escapeHtml(item.sourceTitle)}">📽️ ${escapeHtml(item.sourceTitle.slice(0,30))}${item.sourceTitle.length > 30 ? '…' : ''}</span>` : ''}
+        </div>
         ${frontHtml}
         <div class="card-toolbar">
           <button class="small-btn speak-btn" data-review-speak data-speak-text="${escapeHtml(en)}" title="Speak">🔊</button>
@@ -4513,10 +4626,10 @@ Return JSON ONLY, no other text:
         </div>
         ${backHtml}
         <div class="review-actions">
-          <button class="small-btn again" data-review-grade="again">Again</button>
-          <button class="small-btn hard" data-review-grade="hard">Hard</button>
-          <button class="small-btn good" data-review-grade="good">Good</button>
-          <button class="small-btn easy" data-review-grade="easy">Easy</button>
+          <button class="small-btn again" data-review-grade="again">Again<span class="rg-when">${previewGradeInterval(item, 'again')}</span></button>
+          <button class="small-btn hard"  data-review-grade="hard">Hard<span class="rg-when">${previewGradeInterval(item, 'hard')}</span></button>
+          <button class="small-btn good"  data-review-grade="good">Good<span class="rg-when">${previewGradeInterval(item, 'good')}</span></button>
+          <button class="small-btn easy"  data-review-grade="easy">Easy<span class="rg-when">${previewGradeInterval(item, 'easy')}</span></button>
         </div>
       </div>`;
 
@@ -4538,42 +4651,141 @@ Return JSON ONLY, no other text:
     }
   }
 
-  // Improved SRS: ±15% fuzz for intervals ≥ 7d, cap at 365d, mature lapse
-  // halves the interval instead of zeroing it so a single slip doesn't undo
-  // months of work.
-  function applyReviewGrade(item, grade) {
-    const now = new Date();
+  // ════════════════════════════════════════════════════════════════
+  // ANKI-STYLE SRS — phases + learning steps in m/h, review in days.
+  //
+  // PHASES
+  //   learning    — new card stepping through short intervals (1m, 10m)
+  //   review      — graduated card scheduled in days with ease factor
+  //   relearning  — review card that lapsed; one short step then back to review
+  //                 with the lapsed interval halved.
+  //
+  // BUTTONS  (Anki convention)
+  //   Again — reset to first learning step (1m)
+  //   Hard  — repeat current step (or interval × 1.2 in review)
+  //   Good  — next step / graduate / interval × ease
+  //   Easy  — jump straight to 4 days from learning, or interval × ease × 1.3 in review
+  //
+  // Every grade button gets a PREVIEW label ("Again 1m · Hard 10m · Good 1d ·
+  // Easy 4d") computed without committing — pure-function clone + simulate.
+  // ════════════════════════════════════════════════════════════════
+
+  const LEARNING_STEPS_MS = [60_000, 10 * 60_000];      // 1 minute, 10 minutes
+  const RELEARNING_STEPS_MS = [10 * 60_000];             // 10 minutes
+  const GRADUATE_INTERVAL_DAYS = 1;
+  const EASY_GRADUATE_DAYS = 4;
+  const MIN_EASE_FACTOR = 1.3;
+  const MAX_INTERVAL_DAYS = 365;
+
+  function fuzzInterval(iv) {
+    if (iv < 7) return iv;
+    const delta = (Math.random() * 2 - 1) * iv * 0.15;
+    return Math.max(1, Math.round(iv + delta));
+  }
+  function clampInterval(iv) { return Math.min(MAX_INTERVAL_DAYS, Math.max(0, iv)); }
+
+  // Format ms-until-due as a compact Anki-style label.
+  function formatDuration(ms) {
+    if (!isFinite(ms) || ms < 0) ms = 0;
+    if (ms < 60_000)   return '<1m';
+    if (ms < 3600_000) return `${Math.round(ms / 60_000)}m`;
+    if (ms < 86400_000) {
+      const h = ms / 3600_000;
+      return h < 10 ? `${h.toFixed(1).replace(/\.0$/, '')}h` : `${Math.round(h)}h`;
+    }
+    const days = ms / 86400_000;
+    if (days < 30)  return `${Math.round(days)}d`;
+    if (days < 365) return `${Math.round(days / 30)}mo`;
+    return `${(days / 365).toFixed(1)}y`;
+  }
+
+  // Pure mutator: produces the next state for a card given a grade.
+  // Used both for committing reviews AND for the preview labels on buttons.
+  function applyReviewGrade(item, grade, now = new Date(), opts = {}) {
+    const useFuzz = opts.fuzz !== false; // preview disables fuzz for stable labels
     item.reviewCount = Number(item.reviewCount || 0) + 1;
     item.lastReviewedAt = now.toISOString();
+    item.lastRating = grade;
+    let phase = item.phase || (Number(item.intervalDays) > 0 ? 'review' : 'learning');
+    let step = Number(item.learningStep || 0);
     let interval = Number(item.intervalDays || 0);
     let ease = Number(item.ease || 2.5);
-    const MIN_EASE = 1.3;
-    const MAX_INTERVAL = 365;
-    const fuzz = (iv) => {
-      if (iv < 7) return iv;
-      const delta = (Math.random() * 2 - 1) * iv * 0.15;
-      return Math.max(1, Math.round(iv + delta));
-    };
-    const clamp = (iv) => Math.min(MAX_INTERVAL, Math.max(0, iv));
+    let dueMs;
 
-    if (grade === 'again') {
-      ease = Math.max(MIN_EASE, ease - 0.25);
-      // Mature card: keep half the interval, mark a 10-minute relearning step.
-      // Young card: full reset like before.
-      const isMature = interval >= 21;
-      interval = isMature ? Math.max(1, Math.round(interval * 0.5)) : 0;
-      item.intervalDays = interval;
-      item.ease = ease;
-      item.dueAt = new Date(now.getTime() + 10 * 60000).toISOString();
+    const inLearningPhase = phase === 'learning' || phase === 'relearning';
+    if (inLearningPhase) {
+      const steps = phase === 'learning' ? LEARNING_STEPS_MS : RELEARNING_STEPS_MS;
+      if (grade === 'again') {
+        step = 0;
+        dueMs = now.getTime() + steps[0];
+      } else if (grade === 'hard') {
+        // Repeat current step (Anki HARD in learning).
+        if (step >= steps.length) step = steps.length - 1;
+        dueMs = now.getTime() + steps[Math.max(0, step)];
+      } else if (grade === 'good') {
+        step += 1;
+        if (step >= steps.length) {
+          // Graduate. From relearning, resume at the pre-lapse interval (we
+          // kept it via intervalDays). From fresh learning, 1 day.
+          phase = 'review';
+          interval = phase === 'review' && Number(item.intervalDays) > 0
+            ? Math.max(1, Math.round(Number(item.intervalDays)))
+            : GRADUATE_INTERVAL_DAYS;
+          if (useFuzz) interval = clampInterval(fuzzInterval(interval));
+          dueMs = now.getTime() + interval * 86400_000;
+        } else {
+          dueMs = now.getTime() + steps[step];
+        }
+      } else if (grade === 'easy') {
+        // Jump out of learning to a comfortable 4-day interval.
+        phase = 'review';
+        interval = EASY_GRADUATE_DAYS;
+        if (useFuzz) interval = clampInterval(fuzzInterval(interval));
+        dueMs = now.getTime() + interval * 86400_000;
+      }
     } else {
-      if (grade === 'hard')  { interval = interval ? Math.max(1, Math.round(interval * 1.2)) : 1; ease = Math.max(MIN_EASE, ease - 0.15); }
-      if (grade === 'good')  { interval = interval ? Math.round(interval * ease)             : 1; }
-      if (grade === 'easy')  { interval = interval ? Math.round(interval * (ease + 0.8))     : 3; ease += 0.15; }
-      interval = clamp(fuzz(interval));
-      item.intervalDays = interval;
-      item.ease = ease;
-      item.dueAt = new Date(now.getTime() + interval * 86400000).toISOString();
+      // ── review phase ──
+      if (grade === 'again') {
+        ease = Math.max(MIN_EASE_FACTOR, ease - 0.20);
+        item.lapses = Number(item.lapses || 0) + 1;
+        // Halve the pre-lapse interval to use after the relearning step graduates.
+        interval = Math.max(1, Math.round(interval * 0.5));
+        phase = 'relearning';
+        step = 0;
+        dueMs = now.getTime() + RELEARNING_STEPS_MS[0];
+      } else if (grade === 'hard') {
+        ease = Math.max(MIN_EASE_FACTOR, ease - 0.15);
+        interval = Math.max(1, Math.round(interval * 1.2));
+        if (useFuzz) interval = clampInterval(fuzzInterval(interval));
+        dueMs = now.getTime() + interval * 86400_000;
+      } else if (grade === 'good') {
+        interval = Math.max(1, Math.round(interval * ease));
+        if (useFuzz) interval = clampInterval(fuzzInterval(interval));
+        dueMs = now.getTime() + interval * 86400_000;
+      } else if (grade === 'easy') {
+        interval = Math.max(1, Math.round(interval * (ease + 0.5)));
+        ease += 0.15;
+        if (useFuzz) interval = clampInterval(fuzzInterval(interval));
+        dueMs = now.getTime() + interval * 86400_000;
+      }
     }
+
+    item.phase = phase;
+    item.learningStep = step;
+    item.intervalDays = interval;
+    item.ease = ease;
+    item.dueAt = new Date(dueMs).toISOString();
+  }
+
+  // Returns the human-readable "next due" label for a given grade, without
+  // mutating the card. Used to label the Again/Hard/Good/Easy buttons.
+  function previewGradeInterval(item, grade) {
+    try {
+      const clone = JSON.parse(JSON.stringify(item));
+      applyReviewGrade(clone, grade, new Date(), { fuzz: false });
+      const ms = new Date(clone.dueAt).getTime() - Date.now();
+      return formatDuration(ms);
+    } catch { return ''; }
   }
 
   function gradeReview(key, grade, type = '') {
@@ -6054,6 +6266,9 @@ Return JSON ONLY in this exact shape:
     url = String(url || '').trim(); if (!url) return;
     const originalUrl = url;
     state.videoUrl = originalUrl;
+    // Tag the active lesson from the URL only if we don't already have a
+    // user-supplied title (e.g. the SRT filename, which is usually nicer).
+    if (!state.lessonTitle && !originalUrl.startsWith('blob:')) setLessonTitle(deriveLessonTitle(originalUrl));
     state.isSeeking = false;
     state.hlsReady = false;
     state.usingCachedVideo = false;
@@ -6285,6 +6500,9 @@ Return JSON ONLY in this exact shape:
       setSmartReviewSettings({ autoSpeak: cb.checked });
       return;
     }
+    const deckStart = e.target.closest('[data-review-start-deck]');
+    if (deckStart) { startReviewSession(deckStart.dataset.reviewStartDeck); return; }
+    if (e.target.closest('[data-review-back-to-decks]')) { showReviewCards(); return; }
     if (e.target.closest('[data-show-saved-lines]')) { showSaved('lines'); return; }
     if (!e.target.closest('.line-action-menu')) hideLineActionMenus();
     if (e.target.matches('[data-close-modal]')) closeModal(e.target.dataset.closeModal);
@@ -6372,8 +6590,8 @@ Return JSON ONLY in this exact shape:
   })();
 
   $('urlBtn').onclick = () => openModal('urlModal'); $('loadUrlBtn').onclick = () => loadUrl($('videoUrlInput').value);
-  $('videoFileInput').onchange = e => { const f = e.target.files[0]; if (f) loadUrl(URL.createObjectURL(f)); };
-  $('subtitleFileInput').onchange = e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => handleSubtitleContent(r.result); r.readAsText(f); };
+  $('videoFileInput').onchange = e => { const f = e.target.files[0]; if (!f) return; setLessonTitle(deriveLessonTitle(f.name)); loadUrl(URL.createObjectURL(f)); };
+  $('subtitleFileInput').onchange = e => { const f = e.target.files[0]; if (!f) return; setLessonTitle(deriveLessonTitle(f.name)); const r = new FileReader(); r.onload = () => handleSubtitleContent(r.result); r.readAsText(f); };
   $('menuUploadSrt').onclick = () => { openMenu(false); $('subtitleFileInput').click(); };
   $('menuAzure').onclick = translateAllAzure;
   // menuLaraAll (Translate all with OpenRouter AI) was removed — subtitle

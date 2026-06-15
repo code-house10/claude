@@ -519,6 +519,34 @@ button:active{transform:scale(.98)}
   .content{padding:10px 16px 48px}
 }
 
+/* ── Anki-style review buttons with next-interval preview ── */
+.review-actions .small-btn{display:flex;flex-direction:column;align-items:center;gap:2px;padding:11px 6px;line-height:1.1;font-size:14px;font-weight:900}
+.review-actions .rg-when{font-size:11px;font-weight:800;opacity:.78;letter-spacing:.2px}
+.review-count{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.review-count>span:first-of-type+span,.review-count>span{flex:1;min-width:0}
+.review-back-btn{flex:none;border:1px solid var(--border);background:#fff;color:var(--text);width:32px;height:30px;border-radius:9px;font-size:16px;font-weight:900;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.review-back-btn:hover{background:var(--surface-2);border-color:var(--border-strong)}
+.review-source{flex:none;background:var(--brand-soft);color:#047857;border:1px solid #bbf7d0;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;direction:ltr;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.review-empty-actions{display:flex;gap:8px;justify-content:center;margin-top:10px;flex-wrap:wrap}
+
+/* ── Deck picker (first screen in Review cards) ── */
+.deck-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.deck-row{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--border);border-radius:14px;padding:13px 14px;cursor:pointer;text-align:left;-webkit-tap-highlight-color:transparent;box-shadow:var(--shadow-xs);font-family:inherit;color:var(--text);transition:transform .08s,box-shadow .18s,border-color .18s}
+.deck-row:hover{border-color:var(--border-strong);box-shadow:var(--shadow-sm);transform:translateY(-1px)}
+.deck-row:active{transform:scale(.99)}
+.deck-row.is-empty{opacity:.55;cursor:default}
+.deck-row.is-empty:hover{transform:none;box-shadow:var(--shadow-xs)}
+.deck-row-all{background:linear-gradient(135deg,#ecfdf5,#eff6ff);border-color:#bbf7d0}
+.deck-icon{flex:none;width:40px;height:40px;border-radius:12px;background:var(--surface-2);display:grid;place-items:center;font-size:20px}
+.deck-row-all .deck-icon{background:rgba(16,185,129,.18)}
+.deck-main{flex:1;min-width:0}
+.deck-name{font-weight:900;font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.deck-meta{font-size:11px;color:var(--muted);font-weight:700;margin-top:2px}
+.deck-due{flex:none;display:flex;flex-direction:column;align-items:center;gap:0;min-width:50px;text-align:center}
+.deck-due b{color:#b45309;font-size:18px;font-weight:900;line-height:1}
+.deck-due small{font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.4px;margin-top:1px}
+.deck-clear{color:#10b981;font-size:18px;font-weight:900}
+
 /* ── Floating menu button (bottom-left, always reachable) ── */
 .fab-menu{
   position:fixed;
