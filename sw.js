@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-cross-device-resume-v25';
-const ASSETS = ['./', './index.html', './style.css?v=cross-device-resume-v25', './app.js?v=cross-device-resume-v25', './vocab-data.js?v=cross-device-resume-v25'];
+const CACHE_NAME = 'jungle-movie-pos-examples-search-v26';
+const ASSETS = ['./', './index.html', './style.css?v=pos-examples-search-v26', './app.js?v=pos-examples-search-v26', './vocab-data.js?v=pos-examples-search-v26'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

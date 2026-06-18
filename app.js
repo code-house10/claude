@@ -2372,6 +2372,8 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
       contextEn: word.contextEn || '',
       contextAr: word.contextAr || '',
       examples: Array.isArray(word.examples) ? word.examples : [],
+      pos: cleanLine(word.pos || ''),
+      level: cleanLine(word.level || ''),
       sourceLineKey: word.sourceLineKey || '',
       sourceTitle: cleanLine(word.sourceTitle || ''),
       startTime: Number(word.startTime || 0),
@@ -4132,6 +4134,30 @@ Return JSON ONLY, no other text:
     try { return await translateMyMemory(term); } catch { return ''; }
   }
 
+  // One Puter call that returns BOTH the part of speech and the Egyptian
+  // Arabic meaning, so the POS badge always shows even for words not in the
+  // bundled vocabulary. Falls back to MyMemory translation (pos blank).
+  async function fetchTermInfoFromPuter(term, contextEn = '') {
+    term = cleanLine(term);
+    const isPhrase = term.includes(' ');
+    if (window.puter?.ai?.chat) {
+      const prompt = `For the English ${isPhrase ? 'phrase' : 'word'} "${term}"${contextEn ? ` (as used in: "${contextEn}")` : ''}, return JSON only:
+{"pos":"<short part of speech abbreviation: n. / v. / adj. / adv. / prep. / pron. / conj. / phr. / idiom>","ar":"<short natural Egyptian colloquial Arabic meaning, المصرية الدارجة, no quotes>"}`;
+      for (const model of PUTER_SUBTITLE_MODELS) {
+        try {
+          const r = await window.puter.ai.chat(prompt, { model, temperature: 0.2, max_tokens: 120 });
+          const parsed = parseJsonLoose(puterResponseToText(r));
+          if (parsed && (parsed.ar || parsed.pos)) {
+            return { pos: cleanLine(parsed.pos || ''), ar: cleanPuterArabicTranslation(parsed.ar || '') };
+          }
+        } catch (e) { console.warn('Puter term info failed:', e); }
+      }
+    }
+    let ar = '';
+    try { ar = await translateMyMemory(term); } catch {}
+    return { pos: '', ar };
+  }
+
   // Build dict-example HTML rows, each with its own 🔊 speak button.
   function renderDictExampleRows(examples) {
     return examples.map(ex => `<div class="example">
@@ -4162,12 +4188,17 @@ Return JSON ONLY, no other text:
     initLocalVocab();
     const meta = (state.meanings && state.meanings[term.toLowerCase()]) || null;
     const lvl = (meta && meta.level) || cefrLevelOf(term) || (state.cefrLevels && state.cefrLevels[term.toLowerCase()]) || '';
-    if ($('dictMeta')) {
+    state.currentDictPos = (meta && meta.pos) || '';
+    state.currentDictLevel = lvl || '';
+    // Renders the level + POS chips (called again after async POS resolves).
+    const renderDictMeta = () => {
+      if (!$('dictMeta')) return;
       const chips = [];
-      if (lvl) chips.push(`<span class="cefr-badge lvl-${lvl}">${lvl}</span>`);
-      if (meta && meta.pos) chips.push(`<span class="pos-badge">${escapeHtml(meta.pos)}</span>`);
+      if (state.currentDictLevel) chips.push(`<span class="cefr-badge lvl-${state.currentDictLevel}">${state.currentDictLevel}</span>`);
+      if (state.currentDictPos) chips.push(`<span class="pos-badge">${escapeHtml(state.currentDictPos)}</span>`);
       $('dictMeta').innerHTML = chips.join(' ');
-    }
+    };
+    renderDictMeta();
     if (meta && meta.ar) $('dictTranslation').textContent = meta.ar;   // instant curated meaning
 
     // Phrase chips: when a SINGLE word was clicked, surface the compound
@@ -4188,15 +4219,28 @@ Return JSON ONLY, no other text:
       contextEn, contextAr: item?.ar || '',
       sourceLineKey: item ? lineKey(item) : '',
       sourceTitle: state.lessonTitle || '',
+      pos: state.currentDictPos || '',
+      level: state.currentDictLevel || '',
       startTime: item?.startTime || 0,
       examples: state.currentDictExamples || []
     });
 
-    // Translation — use the curated offline meaning if we have one; otherwise
-    // Egyptian Puter first, MyMemory fallback.
-    if (!(meta && meta.ar)) {
-      try { $('dictTranslation').textContent = await translateTermPreferred(term, contextEn); }
-      catch { $('dictTranslation').textContent = 'Translation failed'; }
+    // Translation + POS — curated offline meaning if we have one; otherwise a
+    // single Puter call that also yields the part of speech for the badge.
+    if (meta && meta.ar) {
+      if (!state.currentDictPos) {
+        // We have the Arabic but no POS — fetch just the POS in the background.
+        fetchTermInfoFromPuter(term, contextEn).then(info => {
+          if (state.currentDictWord === term && info.pos) { state.currentDictPos = info.pos; renderDictMeta(); }
+        }).catch(() => {});
+      }
+    } else {
+      try {
+        const info = await fetchTermInfoFromPuter(term, contextEn);
+        if (state.currentDictWord !== term) return;
+        $('dictTranslation').textContent = info.ar || 'Translation failed';
+        if (info.pos) { state.currentDictPos = info.pos; renderDictMeta(); }
+      } catch { $('dictTranslation').textContent = 'Translation failed'; }
     }
 
     // Examples — 5 from Puter AI (Egyptian), fallback to dictionary API + MyMemory.
@@ -4572,16 +4616,76 @@ Return JSON ONLY, no other text:
     renderReviewCard();
   }
 
-  // Decks list shown when the user first opens Review cards. Each entry is one
-  // saved-from-movie group with a due/total count and a Start button.
+  // Search across every saved word / phrase / line by English text or Arabic.
+  function searchReviewCards(q) {
+    const ql = String(q || '').trim().toLowerCase();
+    if (!ql) return [];
+    const all = allReviewItems();
+    return all.filter(c => {
+      const it = c.item;
+      const hay = [
+        c.type === 'word' ? it.word : (it.en || ''),
+        it.ar || '', it.contextEn || '', it.templateUsageEn || '', it.sourceTitle || ''
+      ].join(' ').toLowerCase();
+      return hay.includes(ql);
+    });
+  }
+
+  // SHELL — search input is created once so typing keeps focus; only the body
+  // re-renders on each keystroke (same pattern as the dialogue picker).
   function renderReviewDecks() {
     const body = $('savedBody');
-    const decks = reviewDecks();
-    const totalDue = decks.reduce((n, d) => n + d.due, 0);
-    if (!decks.length) {
-      body.innerHTML = `<div class="review-empty"><b>No saved cards yet</b><p>Save words, phrases, or lines while watching to build your decks.</p></div>`;
+    body.innerHTML = `
+      <div class="deck-search-wrap">
+        <input id="deckSearch" class="text-input deck-search" type="search" placeholder="🔎 Search a word or line across all decks…" autocomplete="off" />
+      </div>
+      <div id="deckBody"></div>
+    `;
+    const input = body.querySelector('#deckSearch');
+    if (input) {
+      input.value = state.deckSearch || '';
+      input.addEventListener('input', e => { state.deckSearch = e.target.value; renderDeckBody(); });
+    }
+    renderDeckBody();
+  }
+
+  function renderDeckBody() {
+    const wrap = $('deckBody');
+    if (!wrap) return;
+    const q = (state.deckSearch || '').trim();
+
+    // ── Search results mode ──
+    if (q) {
+      const matches = searchReviewCards(q);
+      if (!matches.length) {
+        wrap.innerHTML = `<p class="hint-small" style="text-align:center;padding:18px">No saved cards match “${escapeHtml(q)}”.</p>`;
+        return;
+      }
+      const rows = matches.slice(0, 50).map(c => {
+        const it = c.item;
+        const en = c.type === 'word' ? it.word : cleanLine(it.en);
+        const icon = c.type === 'line' ? '📜' : (it.kind === 'phrase' ? '💬' : (it.kind === 'template' ? '📐' : '🔤'));
+        return `<div class="deck-search-item">
+          <button class="ex-speak" data-speak-ex="${escapeHtml(en)}" title="Speak">🔊</button>
+          <span class="dsi-icon">${icon}</span>
+          <span class="dsi-en" dir="ltr">${escapeHtml(en.slice(0,60))}</span>
+          ${it.ar ? `<span class="dsi-ar" dir="rtl">${escapeHtml(it.ar.slice(0,30))}</span>` : ''}
+        </div>`;
+      }).join('');
+      wrap.innerHTML = `
+        <button class="full-btn" data-review-search-start>▶️ Review ${matches.length} match${matches.length === 1 ? '' : 'es'}</button>
+        <div class="deck-search-list">${rows}</div>
+      `;
       return;
     }
+
+    // ── Decks mode ──
+    const decks = reviewDecks();
+    if (!decks.length) {
+      wrap.innerHTML = `<div class="review-empty"><b>No saved cards yet</b><p>Save words, phrases, or lines while watching to build your decks.</p></div>`;
+      return;
+    }
+    const totalDue = decks.reduce((n, d) => n + d.due, 0);
     const renderDeck = (d) => `<button class="deck-row${d.due ? '' : ' is-empty'}" data-review-start-deck="${escapeHtml(d.key)}" ${d.due ? '' : 'disabled'}>
       <div class="deck-icon">📽️</div>
       <div class="deck-main">
@@ -4590,7 +4694,7 @@ Return JSON ONLY, no other text:
       </div>
       <div class="deck-due">${d.due > 0 ? `<b>${d.due}</b><small>due now</small>` : `<span class="deck-clear">✓</span>`}</div>
     </button>`;
-    body.innerHTML = `
+    wrap.innerHTML = `
       <p class="hint-small">Pick a movie / series to start reviewing — each deck holds the words, phrases and lines you saved from it.</p>
       <div class="deck-list">
         ${totalDue > 0 ? `<button class="deck-row deck-row-all" data-review-start-deck="__all__">
@@ -4604,6 +4708,25 @@ Return JSON ONLY, no other text:
         ${decks.map(renderDeck).join('')}
       </div>
     `;
+  }
+
+  // Start a review session from the current search matches (ignores due date —
+  // the user explicitly searched for these).
+  function startReviewSearchSession() {
+    const matches = searchReviewCards(state.deckSearch);
+    if (!matches.length) { toast('No matches'); return; }
+    state.reviewDeck = '__search__';
+    state.reviewQueue = matches;
+    state.reviewIndex = 0;
+    state.reviewRevealed = false;
+    state.reviewTyped = '';
+    state.reviewFeedback = '';
+    ensureSessionState(true);
+    state.smartSession.queueIds = state.reviewQueue.map(cardId);
+    $('savedTitle').textContent = `Review · “${cleanLine(state.deckSearch).slice(0,20)}”`;
+    saveReviewProgress();
+    scheduleCloudLibrarySync();
+    renderReviewCard();
   }
 
   // Variant of renderReviewDecks that shows a resume banner at the top.
@@ -4841,10 +4964,25 @@ Return JSON ONLY, no other text:
       </div>`;
     }
 
-    // ─── BACK (always the same: full answer + context) ───
+    // Saved examples (up to 2) shown on the back so the user reviews the word
+    // WITH the natural examples that were generated when it was saved.
+    const exList = Array.isArray(item.examples)
+      ? item.examples.filter(ex => (ex && (ex.en || typeof ex === 'string'))).slice(0, 2)
+      : [];
+    const examplesHtml = exList.length
+      ? `<div class="review-examples"><div class="rev-ex-label">📝 Examples</div>${exList.map(ex => {
+          const exEn = cleanLine(ex.en || ex);
+          const exAr = cleanLine(ex.ar || '');
+          return `<div class="rev-ex"><button class="ex-speak" data-speak-ex="${escapeHtml(exEn)}" title="Speak">🔊</button><p dir="ltr">${escapeHtml(exEn)}</p>${exAr ? `<p dir="rtl" class="rev-ex-ar">${escapeHtml(exAr)}</p>` : ''}</div>`;
+        }).join('')}</div>`
+      : '';
+    const posChip = (isWord && item.pos) ? `<span class="rev-pos">${escapeHtml(item.pos)}</span>` : '';
+
+    // ─── BACK (full answer + POS + saved examples + context) ───
     const backHtml = `<div class="review-back ${state.reviewRevealed ? '' : 'hidden'}" dir="rtl">
-      <div class="back-main">${escapeHtml(ar)}</div>
+      <div class="back-main">${escapeHtml(ar)} ${posChip}</div>
       <div class="back-en" dir="ltr">${escapeHtml(en)}</div>
+      ${examplesHtml}
       ${reviewContext}
     </div>`;
 
@@ -6746,6 +6884,7 @@ Return JSON ONLY in this exact shape:
     }
     const deckStart = e.target.closest('[data-review-start-deck]');
     if (deckStart) { clearReviewProgress(); startReviewSession(deckStart.dataset.reviewStartDeck); return; }
+    if (e.target.closest('[data-review-search-start]')) { clearReviewProgress(); startReviewSearchSession(); return; }
     if (e.target.closest('[data-review-back-to-decks]')) { clearReviewProgress(); scheduleCloudLibrarySync(); showReviewCards(); return; }
     if (e.target.closest('[data-resume-review]')) { resumeReviewSession(); return; }
     if (e.target.closest('[data-discard-review]')) { clearReviewProgress(); scheduleCloudLibrarySync(); renderReviewDecks(); return; }

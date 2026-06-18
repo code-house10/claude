@@ -569,6 +569,26 @@ button:active{transform:scale(.98)}
   .resume-btn{padding:12px 14px!important;font-size:14px!important}
 }
 
+/* ── POS chip on review-card back + saved examples ── */
+.rev-pos{display:inline-block;background:var(--surface-2);color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:2px 9px;font-size:12px;font-weight:800;vertical-align:middle;margin-inline-start:6px}
+.review-examples{margin-top:10px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:10px}
+.rev-ex-label{font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
+.rev-ex{position:relative;padding:7px 0 7px 0;border-top:1px solid var(--surface-2)}
+.rev-ex:first-of-type{border-top:0}
+.rev-ex p{margin:0;font-weight:800;color:var(--text);line-height:1.45;direction:ltr;text-align:left;padding-inline-end:34px}
+.rev-ex .rev-ex-ar{color:#047857;font-weight:700;font-size:13px;margin-top:3px;direction:rtl;text-align:right;padding-inline-end:0}
+.rev-ex .ex-speak{position:absolute;top:6px;right:0;padding:4px 8px;font-size:12px}
+
+/* ── Deck search ── */
+.deck-search-wrap{margin-bottom:8px}
+.deck-search{margin:0;padding:11px 14px;font-size:14px;font-weight:700}
+.deck-search-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:50vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.deck-search-item{position:relative;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:11px;padding:9px 11px;font-size:13px}
+.deck-search-item .ex-speak{flex:none;padding:4px 8px;font-size:12px}
+.dsi-icon{flex:none;font-size:15px}
+.dsi-en{flex:1;min-width:0;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
+.dsi-ar{flex:none;color:#047857;font-weight:700;font-size:12px;direction:rtl;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* ── Floating menu button (bottom-left, always reachable) ── */
 .fab-menu{
   position:fixed;
