@@ -2793,6 +2793,68 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     return 0;
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // RESUME PLAYBACK — remember exactly where you stopped.
+  //
+  // We persist { url, time, subtitleIndex, savedAt } to localStorage,
+  // throttled from the sync loop. On the next visit (even days later) we
+  // reload the same video and seek back to that moment + scroll the matching
+  // subtitle into view. Keyed by URL so a different video never resumes wrongly.
+  // ════════════════════════════════════════════════════════════════
+
+  const PLAYBACK_KEY = 'jm_playback_pos';
+  let lastPosSaveAt = 0;
+
+  function savePlaybackPosition(force = false) {
+    const url = state.videoUrl;
+    if (!url || url.startsWith('blob:')) return;   // blob can't be restored
+    const t = getMediaTime();
+    if (!force) {
+      const now = performance.now();
+      if (now - lastPosSaveAt < 3000) return;       // throttle to every 3s
+      lastPosSaveAt = now;
+    }
+    if (!isFinite(t) || t < 1) return;              // ignore the very start
+    try {
+      localStorage.setItem(PLAYBACK_KEY, JSON.stringify({
+        url,
+        time: Math.floor(t),
+        subtitleIndex: state.lastIndex >= 0 ? state.lastIndex : state.activeIndex,
+        savedAt: new Date().toISOString()
+      }));
+    } catch {}
+  }
+
+  function getSavedPlayback(url) {
+    try {
+      const p = JSON.parse(localStorage.getItem(PLAYBACK_KEY) || 'null');
+      if (p && p.url === url && Number(p.time) > 1) return p;
+    } catch {}
+    return null;
+  }
+
+  // After a video is ready, jump back to the saved spot for this URL.
+  function resumePlaybackIfSaved(url) {
+    const p = getSavedPlayback(url);
+    if (!p) return;
+    const dur = (state.playerType === 'html5' ? el.movie.duration : 0) || 0;
+    // Don't resume if we were basically at the end (let it start fresh).
+    if (dur && p.time >= dur - 5) return;
+    const target = Math.max(0, p.time - 1);   // small rewind for context
+    try {
+      if (state.playerType === 'html5') { el.movie.currentTime = target; }
+      else if (state.playerType === 'youtube' && state.yt?.seekTo) { state.yt.seekTo(target, true); }
+    } catch {}
+    state.lastSeekSubtitleTime = target;
+    // Scroll the matching subtitle into view.
+    if (Number.isInteger(p.subtitleIndex) && p.subtitleIndex >= 0 && state.subtitles[p.subtitleIndex]) {
+      setTimeout(() => { renderList(p.subtitleIndex); highlightCard(p.subtitleIndex); }, 120);
+    }
+    const when = formatTime(target);
+    toast(`▶ Resumed where you stopped · ${when}`);
+    setStatus(`Resumed from ${when}${p.savedAt ? ` (saved ${new Date(p.savedAt).toLocaleDateString()})` : ''}`);
+  }
+
   function subtitleTimeToMediaTime(time) {
     // syncLoop uses: subtitleTime = mediaTime - offset
     // so a click on subtitle time must seek to: subtitleTime + offset.
@@ -2996,6 +3058,8 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
         state.activeIndex = -1;
         updateDock(null);
       }
+      // Remember where we are (throttled internally to once every 3s).
+      savePlaybackPosition();
     }
     state.syncTicker = requestAnimationFrame(syncLoop);
   }
@@ -6679,11 +6743,14 @@ Return JSON ONLY in this exact shape:
       if (opts.autoplay !== false) playMediaElement();
     }
     el.movie.playbackRate = state.speed;
+    // Jump back to where the user stopped last time (same URL), unless the
+    // caller explicitly disabled it (e.g. clicking a subtitle to start there).
+    if (opts.resume !== false) resumePlaybackIfSaved(originalUrl);
     if (!state.usingCachedVideo) setStatus('Video loaded');
   }
 
   function extractYtId(url) { const m = String(url).match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{11})/); return m?.[1] || null; }
-  async function loadYouTube(id) { state.playerType = 'youtube'; el.movie.classList.add('hidden'); el.ytHost.classList.remove('hidden'); if (!window.YT?.Player) { await loadScript('https://www.youtube.com/iframe_api'); await new Promise(r => { window.onYouTubeIframeAPIReady = r; setTimeout(r, 1500); }); } if (state.yt?.loadVideoById) state.yt.loadVideoById(id); else state.yt = new YT.Player('ytPlayer', { videoId:id, playerVars:{playsinline:1, rel:0, modestbranding:1}, events:{onReady:e=>{e.target.playVideo(); if (e.target.setPlaybackRate) e.target.setPlaybackRate(state.speed);}} }); }
+  async function loadYouTube(id) { state.playerType = 'youtube'; el.movie.classList.add('hidden'); el.ytHost.classList.remove('hidden'); if (!window.YT?.Player) { await loadScript('https://www.youtube.com/iframe_api'); await new Promise(r => { window.onYouTubeIframeAPIReady = r; setTimeout(r, 1500); }); } const onReady = e => { e.target.playVideo(); if (e.target.setPlaybackRate) e.target.setPlaybackRate(state.speed); setTimeout(() => resumePlaybackIfSaved(state.videoUrl), 400); }; if (state.yt?.loadVideoById) { state.yt.loadVideoById(id); setTimeout(() => resumePlaybackIfSaved(state.videoUrl), 600); } else state.yt = new YT.Player('ytPlayer', { videoId:id, playerVars:{playsinline:1, rel:0, modestbranding:1}, events:{ onReady } }); }
   function destroyHls() { if (state.hls) { try { state.hls.destroy(); } catch {} state.hls = null; } }
   async function attachHls(url) {
     if (el.movie.canPlayType('application/vnd.apple.mpegurl')) {
@@ -7152,6 +7219,11 @@ Return JSON ONLY in this exact shape:
   // Pro cache hooks: time-based threshold trigger + error-based failover.
   el.movie.addEventListener('timeupdate', checkAutoCacheThreshold);
   el.movie.addEventListener('error', handleVideoFailover);
+  el.movie.addEventListener('pause', () => savePlaybackPosition(true));
+  // Flush the exact position when the tab is hidden or closed, so even a quick
+  // exit (before the 3s throttle) is remembered for next time.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') savePlaybackPosition(true); });
+  window.addEventListener('pagehide', () => savePlaybackPosition(true));
 
   state.savedWords = state.savedWords.map(normalizeSavedWord).filter(x => x.word && !isHiddenCloudSettingsItem(x));
   state.savedLines = state.savedLines.map(normalizeSavedLine);
