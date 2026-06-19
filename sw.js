@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-resume-playback-v27';
-const ASSETS = ['./', './index.html', './style.css?v=resume-playback-v27', './app.js?v=resume-playback-v27', './vocab-data.js?v=resume-playback-v27'];
+const CACHE_NAME = 'jungle-movie-gap-pause-v28';
+const ASSETS = ['./', './index.html', './style.css?v=gap-pause-v28', './app.js?v=gap-pause-v28', './vocab-data.js?v=gap-pause-v28'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

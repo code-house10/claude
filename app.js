@@ -20,6 +20,13 @@
     repeatWaiting: false,
     repeatTimer: null,
     repeatDelaySeconds: Math.min(5, Math.max(1, Number(localStorage.getItem('jm_repeat_delay') || 1))),
+    // "Pause between lines" mode: stop at the end of each subtitle for
+    // gapSeconds, then resume automatically (great for shadowing/repeating).
+    gapPause: localStorage.getItem('jm_gap_pause') === '1',
+    gapSeconds: Math.min(15, Math.max(1, Number(localStorage.getItem('jm_gap_seconds') || 2))),
+    gapWaiting: false,
+    gapPausedIdx: -1,
+    gapTimer: null,
     listCenter: 0,
     renderRadius: 28,
     savedWords: readJSON('jm_saved_words', []),
@@ -2970,6 +2977,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   function seekMedia(time, play=true, opts = {}) {
     const target = subtitleTimeToMediaTime(time);
     state.lastSeekSubtitleTime = Number(time) || 0;
+    // A manual jump cancels any pending gap pause and lets the new line re-arm.
+    cancelGapPause();
+    state.gapPausedIdx = -1;
     if (state.playerType === 'html5') { html5SmartSeek(target, play, opts); }
     if (state.playerType === 'youtube' && state.yt?.seekTo) {
       state.seekGuardUntil = performance.now() + 900;
@@ -3054,6 +3064,13 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
           highlightCard(idx);
         }
         if (state.autoPause && mediaTime >= item.endTime - 0.05 && state.repeatStart < 0) pauseMedia();
+        // Pause-between-lines: at the end of each subtitle, stop for gapSeconds
+        // then resume. Guarded so it fires once per line and not during repeat.
+        if (state.gapPause && !state.gapWaiting && state.repeatStart < 0 && !state.autoPause
+            && state.gapPausedIdx !== idx
+            && mediaTime >= item.endTime - 0.05) {
+          beginGapPause(idx);
+        }
       } else if (state.lastIndex >= 0) {
         state.activeIndex = -1;
         updateDock(null);
@@ -3082,6 +3099,35 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
         state.repeatGuardUntil = performance.now() + 900;
       }
     }, gapMs);
+  }
+
+  // Pause for gapSeconds at the end of a subtitle, then auto-resume playback.
+  function beginGapPause(idx) {
+    state.gapWaiting = true;
+    state.gapPausedIdx = idx;
+    const secs = Math.min(15, Math.max(1, Number(state.gapSeconds || 2)));
+    pauseMedia();
+    clearTimeout(state.gapTimer);
+    // Live countdown in the status so the learner knows it'll continue.
+    let left = secs;
+    setStatus(`⏸ Pause ${left}s — repeat the line…`);
+    const tick = setInterval(() => {
+      left -= 1;
+      if (left > 0) setStatus(`⏸ Pause ${left}s — repeat the line…`);
+    }, 1000);
+    state.gapTimer = setTimeout(() => {
+      clearInterval(tick);
+      state.gapWaiting = false;
+      // Only resume if the user didn't manually start playing/seeking meanwhile.
+      playMedia();
+      setStatus('Playing');
+    }, secs * 1000);
+  }
+
+  // Cancel any pending gap pause (used when the user manually plays/seeks).
+  function cancelGapPause() {
+    if (state.gapTimer) { clearTimeout(state.gapTimer); state.gapTimer = null; }
+    state.gapWaiting = false;
   }
 
   function renderList(center = state.listCenter) {
@@ -6688,6 +6734,8 @@ Return JSON ONLY in this exact shape:
     el.speedBtn.textContent = `${state.speed.toFixed(1)}x`;
     el.autoPauseBtn.textContent = state.autoPause ? 'On' : 'Off';
     if (el.repeatDelayValue) el.repeatDelayValue.textContent = `${state.repeatDelaySeconds}s`;
+    const gp = $('gapPauseBtn'); if (gp) gp.textContent = state.gapPause ? 'On' : 'Off';
+    const gv = $('gapValue'); if (gv) gv.textContent = `${state.gapSeconds}s`;
     const hb = $('highlightHfBtn'); if (hb) hb.textContent = state.highlightHF ? 'On' : 'Off';
     const tts = (typeof getTtsSettings === 'function') ? getTtsSettings() : null;
     const eb = $('ttsEngineBtn');
@@ -7082,6 +7130,15 @@ Return JSON ONLY in this exact shape:
   if ($('repeatDelayMinus')) $('repeatDelayMinus').onclick = () => { state.repeatDelaySeconds = Math.max(1, Number(state.repeatDelaySeconds || 1) - 1); updateControls(); debounceSave(); toast(`Repeat pause: ${state.repeatDelaySeconds}s`); };
   if ($('repeatDelayPlus')) $('repeatDelayPlus').onclick = () => { state.repeatDelaySeconds = Math.min(5, Number(state.repeatDelaySeconds || 1) + 1); updateControls(); debounceSave(); toast(`Repeat pause: ${state.repeatDelaySeconds}s`); };
   $('autoPauseBtn').onclick = () => { state.autoPause = !state.autoPause; updateControls(); };
+  if ($('gapPauseBtn')) $('gapPauseBtn').onclick = () => {
+    state.gapPause = !state.gapPause;
+    localStorage.setItem('jm_gap_pause', state.gapPause ? '1' : '0');
+    if (!state.gapPause) { cancelGapPause(); state.gapPausedIdx = -1; if (state.gapWaiting) playMedia(); }
+    updateControls();
+    toast(state.gapPause ? `Pause between lines: ${state.gapSeconds}s` : 'Pause between lines off');
+  };
+  if ($('gapMinus')) $('gapMinus').onclick = () => { state.gapSeconds = Math.max(1, Number(state.gapSeconds || 2) - 1); localStorage.setItem('jm_gap_seconds', String(state.gapSeconds)); updateControls(); toast(`Pause length: ${state.gapSeconds}s`); };
+  if ($('gapPlus')) $('gapPlus').onclick = () => { state.gapSeconds = Math.min(15, Number(state.gapSeconds || 2) + 1); localStorage.setItem('jm_gap_seconds', String(state.gapSeconds)); updateControls(); toast(`Pause length: ${state.gapSeconds}s`); };
   if ($('highlightHfBtn')) $('highlightHfBtn').onclick = () => {
     state.highlightHF = !state.highlightHF;
     localStorage.setItem('jm_highlight_hf', state.highlightHF ? '1' : '0');
