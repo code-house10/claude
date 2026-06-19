@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Jungle Movie Lite - OpenRouter AI</title>
-  <link rel="stylesheet" href="./style.css?v=gap-pause-v28" />
+  <link rel="stylesheet" href="./style.css?v=story-summary-v29" />
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -116,6 +116,7 @@
             <button id="menuReviewCards" class="m-btn" data-label="Review cards SRS due"><span class="m-icon">🔁</span>Review cards</button>
             <button id="menuConnectedSpeech" class="m-btn" data-label="Connected speech reductions gonna wanna pronunciation fast english"><span class="m-icon">🗣️</span>Connected speech</button>
             <button id="menuDialoguePractice" class="m-btn primary" data-label="Dialogue practice AI generate conversation saved words phrases Egyptian"><span class="m-icon">🗨️</span>Dialogue practice</button>
+            <button id="menuStorySummary" class="m-btn" data-label="Summarize movie as short story speaking practice narration"><span class="m-icon">📖</span>Story summary</button>
             <button id="menuExtractTemplates" class="m-btn" data-label="Extract templates all subtitles"><span class="m-icon">🪄</span>Extract templates</button>
           </div>
         </details>
@@ -291,6 +292,13 @@
     </div>
   </div>
 
+  <div id="storyModal" class="modal hidden">
+    <div class="modal-card tall-card">
+      <div class="modal-head"><b>📖 Story summary</b><button data-close-modal="storyModal">×</button></div>
+      <div id="storyBody" class="story-body"></div>
+    </div>
+  </div>
+
   <div id="dialogueModal" class="modal hidden">
     <div class="modal-card tall-card">
       <div class="modal-head"><b>🗨️ Dialogue practice</b><button data-close-modal="dialogueModal">×</button></div>
@@ -323,11 +331,11 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="https://js.puter.com/v2/"></script>
-  <script src="./vocab-data.js?v=gap-pause-v28"></script>
-  <script src="./app.js?v=gap-pause-v28"></script>
+  <script src="./vocab-data.js?v=story-summary-v29"></script>
+  <script src="./app.js?v=story-summary-v29"></script>
   <script>
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=gap-pause-v28').then(r => r.update()).catch(() => {}));
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=story-summary-v29').then(r => r.update()).catch(() => {}));
     }
   </script>
 </body>

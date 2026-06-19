@@ -6717,6 +6717,171 @@ Return JSON ONLY in this exact shape:
     openDict(term, -1);
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // STORY SUMMARY — condense the whole movie into ONE short story for
+  // speaking practice (retelling the events aloud). OpenRouter first,
+  // Puter AI fallback. Long transcripts are summarised in two passes so
+  // context across the entire film is preserved. The result is rendered
+  // through wordHtml() so the top-3000 high-frequency words are coloured
+  // and tappable just like subtitles.
+  // ════════════════════════════════════════════════════════════════
+
+  const STORY_KEY = 'jm_stories';
+
+  // Try OpenRouter, then Puter AI. Returns plain text.
+  async function callStoryLLM(prompt, system, maxTokens) {
+    if (getOpenRouterConfig().apiKey) {
+      try {
+        const t = await callOpenRouterText(prompt, { temperature: 0.5, maxTokens, system });
+        if (t && t.trim()) return cleanLine(t);
+      } catch (e) { console.warn('OpenRouter story failed, trying Puter:', e); }
+    }
+    if (window.puter?.ai?.chat) {
+      for (const model of PUTER_SUBTITLE_MODELS) {
+        try {
+          const r = await window.puter.ai.chat(`${system}\n\n${prompt}`, { model, temperature: 0.5, max_tokens: maxTokens });
+          const t = cleanLine(puterResponseToText(r));
+          if (t) return t;
+        } catch (e) { console.warn('Puter story failed with model', model, e); }
+      }
+    }
+    throw new Error('No AI available. Add an OpenRouter key (Menu → Settings) or make sure Puter AI is loaded.');
+  }
+
+  // Collapse the full transcript; if it's very long, summarise it in chunks
+  // first so the final story still reflects the whole film.
+  async function condenseTranscript() {
+    const full = state.subtitles.map(s => cleanLine(s.en)).filter(Boolean).join(' ');
+    if (full.length <= 6000) return full;
+    const sentences = full.split(/(?<=[.!?])\s+/);
+    const chunks = [];
+    let cur = '';
+    for (const part of sentences) {
+      if ((cur + part).length > 5000 && cur) { chunks.push(cur.trim()); cur = part + ' '; }
+      else cur += part + ' ';
+    }
+    if (cur.trim()) chunks.push(cur.trim());
+    // Cap to 8 evenly-spaced chunks so a huge film doesn't fire 30 calls.
+    let work = chunks;
+    if (chunks.length > 8) {
+      work = [];
+      const step = chunks.length / 8;
+      for (let i = 0; i < 8; i++) work.push(chunks[Math.floor(i * step)]);
+    }
+    const partials = [];
+    for (let i = 0; i < work.length; i++) {
+      setStatus(`Reading the film… part ${i + 1}/${work.length}`);
+      try {
+        const s = await callStoryLLM(
+          `Summarize this section of a movie's dialogue into 2-3 sentences capturing only the key events. Plain prose:\n\n${work[i]}`,
+          'You compress movie dialogue into concise plot notes. Output prose only.',
+          200
+        );
+        partials.push(s);
+      } catch (e) { console.warn('Chunk summary failed:', e); }
+    }
+    return partials.join(' ') || full.slice(0, 6000);
+  }
+
+  async function generateStory() {
+    if (!state.subtitles.length) { toast('Load subtitles first'); return; }
+    openMenu(false);
+    state.storyBusy = true;
+    renderStory();
+    openModal('storyModal');
+    try {
+      const condensed = await condenseTranscript();
+      setStatus('Writing the short story…');
+      const prompt = `Below is the dialogue/transcript of a movie or episode. Write a SHORT, coherent story that retells what happens, WITHOUT losing the key context or main events. Keep it as SHORT as possible while still making sense — aim for 150-220 words, a few tight paragraphs.
+
+RULES:
+- Natural narrative English, simple past tense, the kind you'd use to tell a friend "so this movie is about…".
+- Preserve the main characters, the core conflict, and how it resolves.
+- No spoilers warning, no headings, no bullet points, no preamble like "Here is the story". Just the story prose.
+- Easy to read aloud for speaking practice.
+
+TRANSCRIPT:
+${condensed}`;
+      const story = await callStoryLLM(prompt, 'You are a concise storyteller who retells films as short, natural narration for English learners.', 700);
+      state.story = { text: cleanLine(story), ar: '', createdAt: new Date().toISOString(), title: state.lessonTitle || '' };
+      saveStoryToHistory(state.story);
+      state.storyBusy = false;
+      renderStory();
+      setStatus('Story ready');
+    } catch (e) {
+      state.storyBusy = false;
+      state.storyError = e.message || String(e);
+      renderStory();
+      setStatus('Story generation failed');
+    }
+  }
+
+  function saveStoryToHistory(story) {
+    try {
+      const list = readJSON(STORY_KEY, []);
+      list.unshift(story);
+      writeJSON(STORY_KEY, list.slice(0, 20));
+    } catch {}
+  }
+
+  async function translateStoryToArabic() {
+    if (!state.story?.text) return;
+    setStatus('Translating story to Egyptian Arabic…');
+    try {
+      const ar = await callStoryLLM(
+        `Translate this short story into natural Egyptian colloquial Arabic (المصرية الدارجة), keeping it readable and friendly:\n\n${state.story.text}`,
+        'You translate English into natural Egyptian Arabic. Output the Arabic only.',
+        900
+      );
+      state.story.ar = cleanLine(ar);
+      renderStory();
+      setStatus('Story translated');
+    } catch (e) { toast('Translation failed'); }
+  }
+
+  function renderStory() {
+    const body = $('storyBody');
+    if (!body) return;
+    if (state.storyBusy) {
+      body.innerHTML = `<div class="story-loading"><div class="d-spin">📖</div><p><b>Building your short story…</b></p><p class="hint-small">Condensing the whole film while keeping the key events.</p></div>`;
+      return;
+    }
+    if (state.storyError) {
+      body.innerHTML = `<div class="speak-error">${escapeHtml(state.storyError)}</div><button class="full-btn" data-story-generate>🔄 Try again</button>`;
+      state.storyError = '';
+      return;
+    }
+    const story = state.story;
+    if (!story?.text) { body.innerHTML = `<button class="full-btn" data-story-generate>📖 Summarize this movie as a short story</button>`; return; }
+    // Render through wordHtml so HF/CEFR words are coloured + tappable.
+    const paras = story.text.split(/\n+/).filter(Boolean)
+      .map(p => `<p class="story-para" dir="ltr">${wordHtml(p, -1)}</p>`).join('');
+    const arBlock = story.ar
+      ? `<div class="story-ar" dir="rtl">${escapeHtml(story.ar)}</div>`
+      : '';
+    body.innerHTML = `
+      <div class="story-toolbar">
+        <button class="small-btn primary-pill" data-story-play>▶ Play all</button>
+        <button class="small-btn" data-story-translate>🌐 ${story.ar ? 'Arabic ✓' : 'Arabic'}</button>
+        <button class="small-btn" data-story-copy>⧉ Copy</button>
+        <button class="small-btn" data-story-generate>🔄 Regenerate</button>
+      </div>
+      ${story.title ? `<div class="story-title" dir="ltr">📽️ ${escapeHtml(story.title)}</div>` : ''}
+      <div class="story-text">${paras}</div>
+      ${arBlock}
+      <p class="hint-small">💡 Tap any coloured word for its meaning. Try retelling the story aloud in your own words.</p>
+    `;
+  }
+
+  function playStoryAll() {
+    if (!state.story?.text) return;
+    cancelTts();
+    const sentences = state.story.text.replace(/\n+/g, ' ').split(/(?<=[.!?])\s+/).filter(Boolean);
+    let i = 0;
+    const next = () => { if (i >= sentences.length) return; speakNatural(sentences[i++], { onended: () => setTimeout(next, 200) }); };
+    next();
+  }
+
   function openMenu(show=true) {
     el.menuSheet.classList.toggle('hidden', !show);
     // Hide the floating menu button while the sheet is open so it doesn't
@@ -7104,6 +7269,26 @@ Return JSON ONLY in this exact shape:
   if ($('menuSavedPhrases')) $('menuSavedPhrases').onclick = () => { openMenu(false); showSaved('phrases'); };
   if ($('menuSavedTemplates')) $('menuSavedTemplates').onclick = () => { openMenu(false); showSaved('templates'); };
   if ($('menuExtractTemplates')) $('menuExtractTemplates').onclick = saveTemplatesFromAllSubtitles;
+  if ($('menuStorySummary')) $('menuStorySummary').onclick = () => {
+    openMenu(false);
+    // Show the saved story for THIS movie if we have one; else offer to generate.
+    const list = readJSON(STORY_KEY, []);
+    state.story = list.find(s => s.title && s.title === state.lessonTitle) || (state.lessonTitle ? null : list[0]) || null;
+    state.storyBusy = false; state.storyError = '';
+    renderStory();
+    openModal('storyModal');
+  };
+  // Story toolbar (delegated)
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-story-generate]')) { generateStory(); return; }
+    if (e.target.closest('[data-story-play]')) { playStoryAll(); return; }
+    if (e.target.closest('[data-story-translate]')) { translateStoryToArabic(); return; }
+    if (e.target.closest('[data-story-copy]')) {
+      const txt = state.story?.text || '';
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt).then(() => toast('Story copied')).catch(() => toast('Copy failed'));
+      return;
+    }
+  });
   $('menuSavedLines').onclick = () => { openMenu(false); showSaved('lines'); };
   $('menuReviewCards').onclick = showReviewCards;
   if ($('menuConnectedSpeech')) $('menuConnectedSpeech').onclick = showConnectedSpeech;
