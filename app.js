@@ -7329,6 +7329,29 @@ ${condensed}`;
   if ($('menuSavedPhrases')) $('menuSavedPhrases').onclick = () => { openMenu(false); showSaved('phrases'); };
   if ($('menuSavedTemplates')) $('menuSavedTemplates').onclick = () => { openMenu(false); showSaved('templates'); };
   if ($('menuExtractTemplates')) $('menuExtractTemplates').onclick = saveTemplatesFromAllSubtitles;
+  // ── PWA install (Add to Home Screen) ──────────────────────────
+  // Android/desktop Chrome fire beforeinstallprompt; we stash it and trigger
+  // it from the menu. iOS Safari has no prompt API, so we show instructions.
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.deferredInstall = e; });
+  window.addEventListener('appinstalled', () => { state.deferredInstall = null; toast('App installed 🎉'); });
+  if ($('menuInstallApp')) $('menuInstallApp').onclick = async () => {
+    openMenu(false);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    if (isStandalone) { toast('Already installed ✓'); return; }
+    if (state.deferredInstall) {
+      state.deferredInstall.prompt();
+      try { await state.deferredInstall.userChoice; } catch {}
+      state.deferredInstall = null;
+      return;
+    }
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (ios) {
+      alert('To install on iPhone/iPad:\n\n1. Tap the Share button (⬆️) in Safari\n2. Choose "Add to Home Screen"\n3. Tap "Add"\n\nThe app opens full-screen, like a normal app — no need to open a link each time.');
+    } else {
+      alert('To install:\n\nOpen your browser menu (⋮) and choose "Install app" / "Add to Home screen".\n\nIf you don\'t see it, the app may already be installed, or try reopening the page.');
+    }
+  };
+
   if ($('menuStorySummary')) $('menuStorySummary').onclick = () => {
     openMenu(false);
     // Show the saved story for THIS movie if we have one; else offer to generate.

@@ -4,7 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Jungle Movie Lite - OpenRouter AI</title>
-  <link rel="stylesheet" href="./style.css?v=story-cloud-frontdict-v30" />
+  <link rel="manifest" href="./manifest.webmanifest?v=pwa-v31" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Jungle Movie" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <link rel="icon" type="image/png" href="./favicon-64.png" />
+  <link rel="stylesheet" href="./style.css?v=pwa-v31" />
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -153,6 +161,7 @@
             <span class="sec-chev">▾</span>
           </summary>
           <div class="menu-grid">
+            <button id="menuInstallApp" class="m-btn primary" data-label="Install app home screen offline mobile desktop"><span class="m-icon">📲</span>Install app</button>
             <button id="menuAiTemplateSettings" class="m-btn" data-label="OpenRouter AI settings examples templates"><span class="m-icon">🤖</span>OpenRouter (examples)</button>
             <button id="menuLaraSettings" class="m-btn" data-label="Lara backup settings translation"><span class="m-icon">🔁</span>Lara backup</button>
           </div>
@@ -331,11 +340,11 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="https://js.puter.com/v2/"></script>
-  <script src="./vocab-data.js?v=story-cloud-frontdict-v30"></script>
-  <script src="./app.js?v=story-cloud-frontdict-v30"></script>
+  <script src="./vocab-data.js?v=pwa-v31"></script>
+  <script src="./app.js?v=pwa-v31"></script>
   <script>
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=story-cloud-frontdict-v30').then(r => r.update()).catch(() => {}));
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=pwa-v31').then(r => r.update()).catch(() => {}));
     }
   </script>
 </body>
