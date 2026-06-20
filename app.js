@@ -3412,7 +3412,39 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
   }
 
   function isHiddenCloudSettingsItem(item) {
-    return isLaraSettingsCloudItem(item) || isChatLlmSettingsCloudItem(item) || isOpenRouterSettingsCloudItem(item) || isReviewProgressCloudItem(item);
+    return isLaraSettingsCloudItem(item) || isChatLlmSettingsCloudItem(item) || isOpenRouterSettingsCloudItem(item) || isReviewProgressCloudItem(item) || isStoriesCloudItem(item);
+  }
+
+  // ── Story summaries cloud sync ──────────────────────────────────
+  // Stories ride the same hidden-settings sync as review progress so every
+  // generated summary is available on all the user's devices.
+  const STORIES_CLOUD_WORD = '__setting:stories__';
+  function isStoriesCloudItem(item) {
+    return item?.word === STORIES_CLOUD_WORD || item?.key === 'setting:stories';
+  }
+  function makeStoriesCloudItem() {
+    const stories = readJSON('jm_stories', []);
+    if (!stories.length) return null;
+    const now = new Date().toISOString();
+    return { kind: 'setting', hidden: true, key: 'setting:stories', word: STORIES_CLOUD_WORD, stories, savedAt: now, updatedAt: now };
+  }
+  function applyStoriesFromCloud(remoteWords = []) {
+    const item = (remoteWords || []).find(isStoriesCloudItem);
+    if (!item || !Array.isArray(item.stories)) return false;
+    // Merge remote + local, dedup by title+createdAt, newest first, cap 20.
+    const local = readJSON('jm_stories', []);
+    const seen = new Set();
+    const merged = [];
+    for (const s of [...item.stories, ...local]) {
+      if (!s || !s.text) continue;
+      const k = `${s.title || ''}::${s.createdAt || ''}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push(s);
+    }
+    merged.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    writeJSON('jm_stories', merged.slice(0, 20));
+    return true;
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -3558,6 +3590,9 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     // Include review progress in cloud sync
     const progress = loadReviewProgress();
     if (progress) hiddenSettings.push(makeReviewProgressCloudItem(progress));
+    // Include story summaries so they sync across devices
+    const storiesItem = makeStoriesCloudItem();
+    if (storiesItem) hiddenSettings.push(storiesItem);
     return [...visibleWords, ...hiddenSettings];
   }
 
@@ -5386,6 +5421,7 @@ Return JSON ONLY, no other text:
         const restoredChatLlm = applyChatLlmSettingsFromCloud(remoteWordsRaw);
         const restoredOpenRouter = applyOpenRouterSettingsFromCloud(remoteWordsRaw);
         applyReviewProgressFromCloud(remoteWordsRaw);
+        applyStoriesFromCloud(remoteWordsRaw);
         const remoteWords = remoteWordsRaw.filter(x => !isHiddenCloudSettingsItem(x));
         if (merge) {
           state.savedLines = mergeByKey(state.savedLines, remoteLines, savedLineMergeKey, normalizeSavedLine);
@@ -6805,6 +6841,7 @@ ${condensed}`;
       const story = await callStoryLLM(prompt, 'You are a concise storyteller who retells films as short, natural narration for English learners.', 700);
       state.story = { text: cleanLine(story), ar: '', createdAt: new Date().toISOString(), title: state.lessonTitle || '' };
       saveStoryToHistory(state.story);
+      scheduleCloudLibrarySync();   // push the new story to the cloud
       state.storyBusy = false;
       renderStory();
       setStatus('Story ready');
@@ -6834,6 +6871,13 @@ ${condensed}`;
         900
       );
       state.story.ar = cleanLine(ar);
+      // Persist the Arabic onto the stored copy + push to cloud.
+      try {
+        const list = readJSON('jm_stories', []);
+        const i = list.findIndex(s => s.createdAt === state.story.createdAt && s.title === state.story.title);
+        if (i >= 0) { list[i] = state.story; writeJSON('jm_stories', list); }
+      } catch {}
+      scheduleCloudLibrarySync();
       renderStory();
       setStatus('Story translated');
     } catch (e) { toast('Translation failed'); }
@@ -6851,8 +6895,23 @@ ${condensed}`;
       state.storyError = '';
       return;
     }
+    // Saved-stories browser (cross-device): list every stored story to reopen.
+    if (state.storyView === 'list') {
+      const list = readJSON('jm_stories', []);
+      const rows = list.length ? list.map((s, i) => `<button class="story-hist-row" data-story-open="${i}">
+        <span class="shr-icon">📖</span>
+        <span class="shr-main"><span class="shr-title" dir="ltr">${escapeHtml(s.title || 'Untitled')}</span><span class="shr-meta">${s.createdAt ? new Date(s.createdAt).toLocaleDateString() : ''} · ${s.text.split(/\s+/).length} words</span></span>
+        ${s.ar ? '<span class="shr-ar">AR</span>' : ''}
+      </button>`).join('') : '<p class="hint-small" style="text-align:center;padding:16px">No saved stories yet.</p>';
+      body.innerHTML = `<div class="story-toolbar"><button class="small-btn" data-story-back>← Back</button><b>📚 Saved stories</b></div><div class="story-hist-list">${rows}</div>`;
+      return;
+    }
     const story = state.story;
-    if (!story?.text) { body.innerHTML = `<button class="full-btn" data-story-generate>📖 Summarize this movie as a short story</button>`; return; }
+    const histCount = readJSON('jm_stories', []).length;
+    if (!story?.text) {
+      body.innerHTML = `<button class="full-btn" data-story-generate>📖 Summarize this movie as a short story</button>${histCount ? `<button class="full-btn" style="margin-top:8px;background:var(--surface-2);color:var(--text)" data-story-history>📚 Open a saved story (${histCount})</button>` : ''}`;
+      return;
+    }
     // Render through wordHtml so HF/CEFR words are coloured + tappable.
     const paras = story.text.split(/\n+/).filter(Boolean)
       .map(p => `<p class="story-para" dir="ltr">${wordHtml(p, -1)}</p>`).join('');
@@ -6865,6 +6924,7 @@ ${condensed}`;
         <button class="small-btn" data-story-translate>🌐 ${story.ar ? 'Arabic ✓' : 'Arabic'}</button>
         <button class="small-btn" data-story-copy>⧉ Copy</button>
         <button class="small-btn" data-story-generate>🔄 Regenerate</button>
+        <button class="small-btn" data-story-history>📚 Saved</button>
       </div>
       ${story.title ? `<div class="story-title" dir="ltr">📽️ ${escapeHtml(story.title)}</div>` : ''}
       <div class="story-text">${paras}</div>
@@ -7274,15 +7334,24 @@ ${condensed}`;
     // Show the saved story for THIS movie if we have one; else offer to generate.
     const list = readJSON(STORY_KEY, []);
     state.story = list.find(s => s.title && s.title === state.lessonTitle) || (state.lessonTitle ? null : list[0]) || null;
-    state.storyBusy = false; state.storyError = '';
+    state.storyBusy = false; state.storyError = ''; state.storyView = null;
     renderStory();
     openModal('storyModal');
   };
   // Story toolbar (delegated)
   document.addEventListener('click', (e) => {
-    if (e.target.closest('[data-story-generate]')) { generateStory(); return; }
+    if (e.target.closest('[data-story-generate]')) { state.storyView = null; generateStory(); return; }
     if (e.target.closest('[data-story-play]')) { playStoryAll(); return; }
     if (e.target.closest('[data-story-translate]')) { translateStoryToArabic(); return; }
+    if (e.target.closest('[data-story-history]')) { state.storyView = 'list'; renderStory(); return; }
+    if (e.target.closest('[data-story-back]')) { state.storyView = null; renderStory(); return; }
+    const openStory = e.target.closest('[data-story-open]');
+    if (openStory) {
+      const list = readJSON('jm_stories', []);
+      const s = list[Number(openStory.dataset.storyOpen)];
+      if (s) { state.story = s; state.storyView = null; renderStory(); }
+      return;
+    }
     if (e.target.closest('[data-story-copy]')) {
       const txt = state.story?.text || '';
       if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt).then(() => toast('Story copied')).catch(() => toast('Copy failed'));

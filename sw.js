@@ -1,5 +1,5 @@
-const CACHE_NAME = 'jungle-movie-story-summary-v29';
-const ASSETS = ['./', './index.html', './style.css?v=story-summary-v29', './app.js?v=story-summary-v29', './vocab-data.js?v=story-summary-v29'];
+const CACHE_NAME = 'jungle-movie-story-cloud-frontdict-v30';
+const ASSETS = ['./', './index.html', './style.css?v=story-cloud-frontdict-v30', './app.js?v=story-cloud-frontdict-v30', './vocab-data.js?v=story-cloud-frontdict-v30'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
