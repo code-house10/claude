@@ -589,6 +589,11 @@ button:active{transform:scale(.98)}
 .dsi-en{flex:1;min-width:0;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
 .dsi-ar{flex:none;color:#047857;font-weight:700;font-size:12px;direction:rtl;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* The dictionary must float ABOVE the story (and any other modal) so tapping a
+   word inside the summary shows its meaning in front, without closing the story. */
+#dictModal{z-index:340}
+#reductionModal{z-index:340}
+
 /* ── Story summary modal ── */
 .story-body{display:flex;flex-direction:column;gap:10px;margin-top:8px}
 .story-loading{padding:30px 12px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px}
@@ -599,6 +604,14 @@ button:active{transform:scale(.98)}
 .story-para{margin:0 0 12px;direction:ltr;text-align:left;font-size:16px;line-height:1.85;font-weight:600;color:var(--text)}
 .story-para:last-child{margin-bottom:0}
 .story-ar{background:var(--brand-soft);border:1px solid #bbf7d0;border-radius:14px;padding:13px;color:#065f46;font-weight:700;font-size:15px;line-height:1.9;direction:rtl;text-align:right}
+.story-hist-list{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+.story-hist-row{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--border);border-radius:13px;padding:11px 12px;cursor:pointer;text-align:left;font-family:inherit;box-shadow:var(--shadow-xs)}
+.story-hist-row:hover{border-color:var(--border-strong);box-shadow:var(--shadow-sm)}
+.shr-icon{flex:none;font-size:20px}
+.shr-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.shr-title{font-weight:900;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
+.shr-meta{font-size:11px;color:var(--muted);font-weight:700;margin-top:2px}
+.shr-ar{flex:none;background:var(--brand-soft);color:#047857;border:1px solid #bbf7d0;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:900}
 
 /* ── Floating menu button (bottom-left, always reachable) ── */
 .fab-menu{
