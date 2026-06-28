@@ -11,7 +11,7 @@ const ELEVEN_BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_MODEL = 'eleven_multilingual_v2';
 const DEFAULT_VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel — natural en-US female
 const MAX_TEXT_LENGTH = 2500;
-const ELEVENLABS_API_KEY_FALLBACK = 'sk_f8f4e801ddba645021cace031bcbebeb6c5ea60e82be9e49';
+const ELEVENLABS_API_KEY_FALLBACK = 'sk_65612301111be4493dacb111701ffdc3accde87ef4e6a97b';
 
 // Per-IP minute throttle so a runaway loop doesn't burn the quota.
 const HITS = new Map();
@@ -49,15 +49,18 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const apiKey = (process.env.ELEVENLABS_API_KEY || ELEVENLABS_API_KEY_FALLBACK || '').trim();
-  if (!apiKey) return res.status(500).json({ error: 'ElevenLabs API key not configured on the server.' });
-
   if (!rateLimit(getClientIp(req))) return res.status(429).json({ error: 'Too many requests — slow down for a minute.' });
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const text = clean(body.text).slice(0, MAX_TEXT_LENGTH);
     if (!text) return res.status(400).json({ error: 'text is required.' });
+
+    // Priority: caller-supplied key (from app's API Keys panel) > server env > hardcoded fallback.
+    // The caller key lets the user rotate keys themselves when the shared key hits its monthly quota.
+    const userKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+    const apiKey = (userKey || process.env.ELEVENLABS_API_KEY || ELEVENLABS_API_KEY_FALLBACK || '').trim();
+    if (!apiKey) return res.status(500).json({ error: 'ElevenLabs API key not configured.' });
 
     const voiceId = clean(body.voice || body.voiceId) || DEFAULT_VOICE_ID;
     const modelId = clean(body.model || body.modelId) || DEFAULT_MODEL;
