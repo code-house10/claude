@@ -91,7 +91,7 @@
     writeJSON('jm_saved_words', state.savedWords);
     writeJSON('jm_saved_lines', state.savedLines);
   }
-  function toast(msg) { clearTimeout(window.__toastTimer); el.toast.textContent = msg; el.toast.classList.remove('hidden'); window.__toastTimer = setTimeout(() => el.toast.classList.add('hidden'), 1800); }
+  function toast(msg, ms) { clearTimeout(window.__toastTimer); el.toast.textContent = msg; el.toast.classList.remove('hidden'); window.__toastTimer = setTimeout(() => el.toast.classList.add('hidden'), ms || 1800); }
   function setStatus(msg) { el.statusText.textContent = msg; if (el.menuStatus) el.menuStatus.textContent = msg; }
   function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
   function plainText(html) { const d = document.createElement('div'); d.innerHTML = html || ''; return (d.textContent || d.innerText || '').replace(/\s+/g, ' ').trim(); }
@@ -4033,18 +4033,36 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     const leadVoiceId = overrideVoice ? overrideVoice.id : cfg.voice;
     const cascade = [lead, ...TTS_PROVIDERS.filter(p => p !== lead)];
 
+    const failures = [];
     for (const engine of cascade) {
       try {
         // Use the override voice only when we're still on its engine; once we
         // fall back to a different engine we let it pick its own first voice.
         const voiceForThis = engine === lead ? leadVoiceId : cfg.voice;
         await attemptEngine(engine, safeText, voiceForThis, { rate, onended: opts.onended, pitch: opts.pitch });
+        // If we fell back from the user's chosen engine, tell them WHY so they
+        // don't silently end up on a different voice (most common cause: free
+        // ElevenLabs / Inworld monthly quota exhausted, or backend key expired).
+        if (engine !== lead && !opts.silent && typeof toast === 'function') {
+          const why = failures[0]?.err || 'failed';
+          toast(`${lead} unavailable (${why}). Falling back to ${engine}.`, 5000);
+        }
         return;
       } catch (e) {
-        console.warn(`TTS engine "${engine}" failed, trying next:`, e?.message || e);
+        const msg = String(e?.message || e).slice(0, 140);
+        failures.push({ engine, err: msg });
+        console.warn(`TTS engine "${engine}" failed, trying next:`, msg);
+        // Don't keep a half-broken Audio in the cache for next time.
+        try {
+          const voice = defaultVoiceFor(engine, engine === lead ? leadVoiceId : cfg.voice);
+          if (voice) TTS_CACHE.delete(`${engine}::${voice.id}::${safeText}`);
+        } catch {}
       }
     }
-    console.error('All TTS engines failed for:', safeText);
+    console.error('All TTS engines failed for:', safeText, failures);
+    if (typeof toast === 'function') {
+      toast(`All voices failed. First error: ${failures[0]?.engine || '?'} — ${failures[0]?.err || '?'}`, 6000);
+    }
   }
 
   // Legacy entry points — every old call site routes through here, so flipping
