@@ -4846,18 +4846,27 @@ Return JSON ONLY, no other text:
   function buildFluencySituationsPrompt(target, context) {
     const ctxLine = context ? `\nThe target was originally seen in this scene line: "${context}"` : '';
     return (
-`You're an English coach for an Egyptian-Arabic-speaking learner.
+`You're an English coach for an Egyptian-Arabic-speaking learner practicing FLUENCY.
 Generate exactly 3 short DAILY-LIFE situations where they should naturally use the target below.
-Each situation should be from a different setting (e.g. work, family, friends, shopping, travel, school).
-Keep prompts realistic and SHORT — one Arabic sentence each, plus an optional one-word English hint.
+Each situation should be from a DIFFERENT setting (work, family, friends, shopping, travel, school, restaurant, doctor, etc.).
+
+For each situation, provide:
+- "ar": ONE short Arabic line describing the SITUATION/CONTEXT only — NOT a sentence to translate.
+        Example: "إنت في اجتماع شغل و عايز تعترض بأدب على فكرة مديرك."
+        BAD example (don't do this): "قول لمديرك إن الفكرة دي مش حلوة." (sounds like a translation task)
+- "tag": one English label for the setting (e.g. "work", "family", "restaurant")
+- "keywords": array of 3-5 English words/phrases (natural collocations, discourse markers, or related vocabulary)
+              that would help the learner build a more PROFESSIONAL, natural English sentence using the target.
+              Pick scaffolding that fits the situation — connectors (actually, to be honest), softeners (would, might),
+              register cues (sir, mate), or vocabulary that pairs well with the target.
 
 TARGET: "${target}"${ctxLine}
 
 Return strict JSON only, no markdown:
 { "situations": [
-    { "ar": "...", "hint": "work" },
-    { "ar": "...", "hint": "family" },
-    { "ar": "...", "hint": "social" }
+    { "ar": "...", "tag": "work",      "keywords": ["...", "...", "..."] },
+    { "ar": "...", "tag": "family",    "keywords": ["...", "...", "..."] },
+    { "ar": "...", "tag": "restaurant","keywords": ["...", "...", "..."] }
 ] }`
     );
   }
@@ -4944,16 +4953,24 @@ Return strict JSON only:
     if (FLUENCY_SITUATION_CACHE.has(key)) return FLUENCY_SITUATION_CACHE.get(key);
     const parsed = await callFluencyLLM(buildFluencySituationsPrompt(target, context), { maxTokens: 350, temperature: 0.7 });
     const list = Array.isArray(parsed?.situations) ? parsed.situations : (Array.isArray(parsed) ? parsed : []);
-    const cleaned = list.slice(0, 3).map(s => ({
-      ar: cleanLine(s?.ar || s?.arabic || ''),
-      hint: cleanLine(s?.hint || s?.tag || '').slice(0, 24)
-    })).filter(s => s.ar);
-    while (cleaned.length < 3) {
-      cleaned.push({
-        ar: ['تخيّل إنك بتكلم صاحبك عن موقف حصلك إمبارح.', 'اشرح لزميلك في الشغل قرار محتاج تاخده.', 'احكي لأهلك عن خطة لإجازتك الجاية.'][cleaned.length] || 'اكتب جملة طبيعية بالكلمة دي.',
-        hint: ''
-      });
-    }
+    const cleaned = list.slice(0, 3).map(s => {
+      const rawKeys = Array.isArray(s?.keywords) ? s.keywords : (Array.isArray(s?.hints) ? s.hints : []);
+      const keywords = rawKeys
+        .map(k => cleanLine(typeof k === 'string' ? k : (k?.word || k?.en || '')))
+        .filter(Boolean)
+        .slice(0, 5);
+      return {
+        ar: cleanLine(s?.ar || s?.arabic || ''),
+        tag: cleanLine(s?.tag || s?.hint || '').slice(0, 16),
+        keywords
+      };
+    }).filter(s => s.ar);
+    const FALLBACK = [
+      { ar: 'إنت في شغلك و عايز تشرح موقف لمديرك.', tag: 'work',      keywords: ['actually', 'to be honest', 'would'] },
+      { ar: 'بتتكلم مع صاحب قريب عن حاجة حصلت معاك.', tag: 'friends',   keywords: ['you know', 'I mean', 'basically'] },
+      { ar: 'في مطعم بتطلب طلب أو بتسأل الويتر.',     tag: 'restaurant',keywords: ['could you', 'I was wondering', 'instead of'] }
+    ];
+    while (cleaned.length < 3) cleaned.push(FALLBACK[cleaned.length]);
     FLUENCY_SITUATION_CACHE.set(key, cleaned);
     return cleaned;
   }
@@ -4977,6 +4994,24 @@ Return strict JSON only:
       };
     });
     return { attempts: out, overall: cleanLine(parsed?.overall || '') };
+  }
+
+  // Evaluate a SINGLE attempt — used by the per-slot Check button so the
+  // learner gets feedback as they finish each situation, not at the end.
+  async function evaluateFluencySingle(target, attempt, context = '') {
+    const text = (attempt?.text || '').trim();
+    if (!text) throw new Error('Write or speak a sentence first.');
+    const wrapped = [{ text, situationAr: attempt.situationAr || '' }];
+    const parsed = await callFluencyLLM(buildFluencyEvaluatePrompt(target, wrapped, context), { maxTokens: 350, temperature: 0.35 });
+    const r = Array.isArray(parsed?.attempts) ? parsed.attempts[0] : null;
+    if (!r) throw new Error('AI returned no feedback for this sentence.');
+    return {
+      score: clampInt(r.score, 0, 10),
+      usedTarget: r.usedTarget !== false,
+      corrected: cleanLine(r.corrected || ''),
+      tip: cleanLine(r.tip || ''),
+      alternative: cleanLine(r.alternative || '')
+    };
   }
 
   function clampInt(n, lo, hi) {
@@ -5004,8 +5039,11 @@ Return strict JSON only:
       target,
       situations: [],
       attempts: [{ text: '', situationAr: '' }, { text: '', situationAr: '' }, { text: '', situationAr: '' }],
+      // Per-slot feedback so the user can Check each one independently.
+      slotFeedback: [null, null, null],
+      slotChecking: [false, false, false],
+      slotError: ['', '', ''],
       loadingSituations: true,
-      evaluating: false,
       feedback: null,
       recordingSlot: -1,
       error: ''
@@ -5048,8 +5086,54 @@ Return strict JSON only:
     if (!state.fluency) return;
     state.fluency.feedback = null;
     state.fluency.attempts = (state.fluency.situations || []).map(s => ({ text: '', situationAr: s.ar }));
+    state.fluency.slotFeedback = [null, null, null];
+    state.fluency.slotChecking = [false, false, false];
+    state.fluency.slotError = ['', '', ''];
     state.fluency.error = '';
     renderReviewCard();
+  }
+
+  // Check ONE slot — returns inline feedback under that situation only.
+  async function checkFluencySlot(slot) {
+    if (!state.fluency) return;
+    if (state.fluency.slotChecking[slot]) return;
+    flushFluencyInputs();
+    const attempt = state.fluency.attempts[slot];
+    if (!attempt || !(attempt.text || '').trim()) {
+      state.fluency.slotError[slot] = 'Write or speak a sentence first.';
+      renderReviewCard();
+      return;
+    }
+    state.fluency.slotChecking[slot] = true;
+    state.fluency.slotError[slot] = '';
+    renderReviewCard();
+    try {
+      const card = state.reviewQueue[state.reviewIndex];
+      const fb = await evaluateFluencySingle(
+        state.fluency.target,
+        attempt,
+        cleanLine(card?.item?.contextEn || '')
+      );
+      if (!state.fluency) return;
+      state.fluency.slotFeedback[slot] = fb;
+      state.fluency.slotChecking[slot] = false;
+      // Auto-save a tiny history entry on each slot check so progress
+      // tracking still works even if user doesn't finish all 3.
+      try {
+        recordFluencyAttempt(state.fluency.cardKey, {
+          target: state.fluency.target,
+          slot,
+          attempt: { text: attempt.text, situationAr: attempt.situationAr },
+          feedback: fb
+        });
+      } catch {}
+      renderReviewCard();
+    } catch (e) {
+      if (!state.fluency) return;
+      state.fluency.slotChecking[slot] = false;
+      state.fluency.slotError[slot] = e?.message || 'Check failed.';
+      renderReviewCard();
+    }
   }
 
   async function toggleFluencyRecording(slot) {
@@ -5101,39 +5185,20 @@ Return strict JSON only:
     }
   }
 
-  async function submitFluencyDrill() {
-    if (!state.fluency || state.fluency.evaluating) return;
+  // Re-do a single slot — clears that slot's feedback + text so the user can
+  // try a new sentence for that situation without resetting the other two.
+  function redoFluencySlot(slot) {
+    if (!state.fluency) return;
     flushFluencyInputs();
-    const filledCount = state.fluency.attempts.filter(a => (a.text || '').trim()).length;
-    if (filledCount === 0) { toast('Fill at least one situation'); return; }
-    state.fluency.evaluating = true;
-    state.fluency.error = '';
+    if (state.fluency.attempts[slot]) state.fluency.attempts[slot].text = '';
+    if (state.fluency.slotFeedback) state.fluency.slotFeedback[slot] = null;
+    if (state.fluency.slotError) state.fluency.slotError[slot] = '';
     renderReviewCard();
-    try {
-      const card = state.reviewQueue[state.reviewIndex];
-      const feedback = await evaluateFluencyAttempts(
-        state.fluency.target,
-        state.fluency.attempts,
-        cleanLine(card?.item?.contextEn || '')
-      );
-      if (!state.fluency) return;
-      state.fluency.feedback = feedback;
-      state.fluency.evaluating = false;
-      // Persist for progress tracking.
-      try {
-        recordFluencyAttempt(state.fluency.cardKey, {
-          target: state.fluency.target,
-          attempts: state.fluency.attempts.map(a => ({ text: a.text, situationAr: a.situationAr })),
-          feedback
-        });
-      } catch {}
-      renderReviewCard();
-    } catch (e) {
-      if (!state.fluency) return;
-      state.fluency.evaluating = false;
-      state.fluency.error = e?.message || 'Evaluation failed.';
-      renderReviewCard();
-    }
+    // Focus the cleared textarea for instant typing.
+    setTimeout(() => {
+      const ta = document.querySelector(`[data-fluency-input="${slot}"]`);
+      if (ta) ta.focus();
+    }, 30);
   }
 
   // ── Fluency drill rendering ───────────────────────────────────────
@@ -5167,42 +5232,55 @@ Return strict JSON only:
     }
 
     const slots = f.attempts.map((att, i) => {
-      const sit = f.situations[i] || { ar: att.situationAr, hint: '' };
+      const sit = f.situations[i] || { ar: att.situationAr, tag: '', keywords: [] };
       const isRecording = f.recordingSlot === i;
-      const fb = f.feedback?.attempts?.[i];
-      const verdictHtml = fb && !fb.skipped ? renderFluencyVerdict(fb) : '';
-      const isLocked = !!f.feedback;
+      const isChecking = !!f.slotChecking?.[i];
+      const slotFb = f.slotFeedback?.[i];
+      const slotErr = f.slotError?.[i] || '';
+      const verdictHtml = slotFb ? renderFluencyVerdict(slotFb) : '';
+      const isLocked = !!slotFb;
+      const keywordsHtml = (sit.keywords && sit.keywords.length)
+        ? `<div class="fluency-keywords" dir="ltr">
+             <span class="fluency-keywords-label">try using:</span>
+             ${sit.keywords.map(k => `<span class="fluency-kw">${escapeHtml(k)}</span>`).join('')}
+           </div>`
+        : '';
       return `<div class="fluency-slot${isLocked ? ' locked' : ''}">
         <div class="fluency-sit">
           <span class="fluency-num">${i + 1}</span>
           <div class="fluency-sit-text" dir="rtl">${escapeHtml(sit.ar)}</div>
-          ${sit.hint ? `<span class="fluency-hint-chip" dir="ltr">${escapeHtml(sit.hint)}</span>` : ''}
+          ${sit.tag ? `<span class="fluency-hint-chip" dir="ltr">${escapeHtml(sit.tag)}</span>` : ''}
         </div>
+        ${keywordsHtml}
         <div class="fluency-input-row">
           <textarea class="fluency-input text-input" dir="ltr" rows="2"
             data-fluency-input="${i}"
-            placeholder="Write or speak — use “${escapeHtml(target)}” naturally…"
+            placeholder="Use “${escapeHtml(target)}” naturally — write or tap the mic…"
             ${isLocked ? 'readonly' : ''}>${escapeHtml(att.text || '')}</textarea>
           ${!isLocked ? `<button class="fluency-mic${isRecording ? ' rec' : ''}" data-fluency-mic="${i}" title="Tap to ${isRecording ? 'stop' : 'speak'}" aria-label="Record">${isRecording ? '⏹' : '🎙️'}</button>` : ''}
         </div>
+        ${!isLocked ? `<button class="small-btn fluency-check-btn" data-fluency-check="${i}" ${isChecking ? 'disabled' : ''}>
+          ${isChecking ? '🧠 Checking…' : '✓ Check this answer'}
+        </button>` : `<button class="small-btn ghost fluency-redo-btn" data-fluency-redo="${i}">↻ Try this one again</button>`}
+        ${slotErr ? `<p class="fluency-error">${escapeHtml(slotErr)}</p>` : ''}
         ${verdictHtml}
       </div>`;
     }).join('');
 
-    const footer = f.feedback
-      ? `<div class="fluency-overall">${escapeHtml(f.feedback.overall || '')}</div>
-         <div class="fluency-actions">
-           <button class="small-btn" data-fluency-retry>↻ Try again</button>
+    // Footer: show overall coaching once at least one slot is checked.
+    const anyChecked = f.slotFeedback?.some(Boolean);
+    const allChecked = f.slotFeedback?.every(Boolean);
+    const footer = allChecked
+      ? `<div class="fluency-actions">
+           <button class="small-btn" data-fluency-retry>↻ Try all again with new situations</button>
            <button class="small-btn primary" data-fluency-exit>✓ Done — back to card</button>
          </div>`
-      : f.evaluating
-        ? `<div class="fluency-evaluating">🧠 Evaluating your sentences…</div>`
-        : `<div class="fluency-actions">
-            <button class="small-btn ghost" data-fluency-exit>Cancel</button>
-            <button class="full-btn primary" data-fluency-submit>✨ Get feedback</button>
-          </div>`;
+      : `<div class="fluency-actions">
+           <button class="small-btn ghost" data-fluency-exit>← Back to card</button>
+           ${anyChecked ? `<button class="small-btn" data-fluency-retry>↻ Reset all</button>` : ''}
+         </div>`;
 
-    const errorHtml = f.error && f.attempts.some(a => a.text)
+    const errorHtml = f.error
       ? `<p class="fluency-error">${escapeHtml(f.error)}</p>` : '';
 
     return `<div class="fluency-panel">
@@ -5699,7 +5777,10 @@ Return strict JSON only:
       </div>`;
 
     // Auto-speak on flip for listen mode (also if user enabled global auto-speak).
-    if (mode === 'listen' || (state.reviewRevealed && getSmartReviewSettings().autoSpeak)) {
+    // Skip while a fluency drill is active — otherwise the TTS playback gets
+    // picked up by the mic and pollutes the user's recording, plus repeated
+    // re-renders during the drill would keep re-triggering it.
+    if (!fluencyActive && (mode === 'listen' || (state.reviewRevealed && getSmartReviewSettings().autoSpeak))) {
       try { setTimeout(() => speakText(en), 80); } catch {}
     }
 
@@ -7770,7 +7851,10 @@ ${condensed}`;
     if (e.target.closest('[data-fluency-start]')) { startFluencyDrill(); return; }
     if (e.target.closest('[data-fluency-exit]'))  { exitFluencyDrill(); return; }
     if (e.target.closest('[data-fluency-retry]')) { resetFluencyAttempts(); return; }
-    if (e.target.closest('[data-fluency-submit]')){ submitFluencyDrill(); return; }
+    const checkBtn = e.target.closest('[data-fluency-check]');
+    if (checkBtn) { checkFluencySlot(Number(checkBtn.dataset.fluencyCheck)); return; }
+    const redoBtn = e.target.closest('[data-fluency-redo]');
+    if (redoBtn) { redoFluencySlot(Number(redoBtn.dataset.fluencyRedo)); return; }
     const micBtn = e.target.closest('[data-fluency-mic]');
     if (micBtn) {
       const slot = Number(micBtn.dataset.fluencyMic);
