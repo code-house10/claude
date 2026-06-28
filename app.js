@@ -4846,34 +4846,39 @@ Return JSON ONLY, no other text:
   function buildFluencySituationsPrompt(target, context) {
     const ctxLine = context ? `\nThe target was originally seen in this scene line: "${context}"` : '';
     return (
-`You're an English coach for an Egyptian-Arabic-speaking learner practicing FLUENCY.
-Generate exactly 3 short DAILY-LIFE situations where they should naturally use the target below.
-Each situation should be from a DIFFERENT setting (work, family, friends, shopping, travel, school, restaurant, doctor, etc.).
+`You're an English fluency coach for an Egyptian-Arabic-speaking learner.
+Generate exactly 3 short DAILY-LIFE scenarios where they should naturally use the target below.
+Each scenario must be from a DIFFERENT setting (work, family, friends, shopping, travel, school, restaurant, doctor, dating, neighbours, etc.).
 
-For each situation, provide:
-- "ar": ONE short Arabic line describing the SITUATION/CONTEXT only — NOT a sentence to translate.
-        Example: "إنت في اجتماع شغل و عايز تعترض بأدب على فكرة مديرك."
-        BAD example (don't do this): "قول لمديرك إن الفكرة دي مش حلوة." (sounds like a translation task)
-- "tag": one English label for the setting (e.g. "work", "family", "restaurant")
-- "keywords": array of 3-5 English words/phrases (natural collocations, discourse markers, or related vocabulary)
-              that would help the learner build a more PROFESSIONAL, natural English sentence using the target.
-              Pick scaffolding that fits the situation — connectors (actually, to be honest), softeners (would, might),
-              register cues (sir, mate), or vocabulary that pairs well with the target.
+EVERYTHING YOU OUTPUT MUST BE IN ENGLISH ONLY. No Arabic at all.
+
+For each scenario, provide:
+- "en": ONE short ENGLISH scene description (8–18 words) — describes the SITUATION/CONTEXT/ROLE,
+        NOT a sentence the learner should translate.
+        ✅ GOOD: "You're in a salary review and your boss offers a number that surprises you positively."
+        ✅ GOOD: "At dinner with friends, someone brings up a topic you strongly disagree with."
+        ❌ BAD:  "Tell your boss that the new salary is great." (this is a translation prompt — DO NOT do this)
+        ❌ BAD:  "The new salary really exceeds my expectations." (this is a sentence to translate — DO NOT do this)
+- "tag": one short English label for the setting (e.g. "work", "family", "restaurant", "doctor")
+- "keywords": array of 3-5 English words/phrases (natural collocations, discourse markers, register cues, OR
+              vocabulary that pairs well with the target) that scaffold a MORE NATURAL, PROFESSIONAL English sentence.
+              Examples: "actually", "to be honest", "would you mind", "I was wondering if", "as a matter of fact",
+                        "by any chance", "instead of", "rather than", "the thing is".
 
 TARGET: "${target}"${ctxLine}
 
 Return strict JSON only, no markdown:
 { "situations": [
-    { "ar": "...", "tag": "work",      "keywords": ["...", "...", "..."] },
-    { "ar": "...", "tag": "family",    "keywords": ["...", "...", "..."] },
-    { "ar": "...", "tag": "restaurant","keywords": ["...", "...", "..."] }
+    { "en": "...", "tag": "work",      "keywords": ["...", "...", "..."] },
+    { "en": "...", "tag": "family",    "keywords": ["...", "...", "..."] },
+    { "en": "...", "tag": "restaurant","keywords": ["...", "...", "..."] }
 ] }`
     );
   }
 
   function buildFluencyEvaluatePrompt(target, attempts, context) {
     const numbered = attempts.map((a, i) =>
-      `${i + 1}. Situation: ${a.situationAr}\n   Learner said: "${a.text}"`
+      `${i + 1}. Situation: ${a.situationEn || a.situationAr || ''}\n   Learner said: "${a.text}"`
     ).join('\n\n');
     const ctxLine = context ? `\nOriginal scene line for reference: "${context}"` : '';
     return (
@@ -4959,16 +4964,18 @@ Return strict JSON only:
         .map(k => cleanLine(typeof k === 'string' ? k : (k?.word || k?.en || '')))
         .filter(Boolean)
         .slice(0, 5);
+      // Prefer the new `en` field but accept legacy `ar`/`arabic` from cached responses
+      // — we'll render whatever we got, but the prompt now asks for English only.
       return {
-        ar: cleanLine(s?.ar || s?.arabic || ''),
+        en: cleanLine(s?.en || s?.english || s?.ar || s?.arabic || ''),
         tag: cleanLine(s?.tag || s?.hint || '').slice(0, 16),
         keywords
       };
-    }).filter(s => s.ar);
+    }).filter(s => s.en);
     const FALLBACK = [
-      { ar: 'إنت في شغلك و عايز تشرح موقف لمديرك.', tag: 'work',      keywords: ['actually', 'to be honest', 'would'] },
-      { ar: 'بتتكلم مع صاحب قريب عن حاجة حصلت معاك.', tag: 'friends',   keywords: ['you know', 'I mean', 'basically'] },
-      { ar: 'في مطعم بتطلب طلب أو بتسأل الويتر.',     tag: 'restaurant',keywords: ['could you', 'I was wondering', 'instead of'] }
+      { en: "You're discussing a project decision with your manager at work.",        tag: 'work',       keywords: ['actually', 'to be honest', 'would', 'might be better'] },
+      { en: "You're catching up with a close friend who asks how things are going.",   tag: 'friends',    keywords: ['you know', 'I mean', 'kind of', 'basically'] },
+      { en: "You're ordering at a restaurant and need to ask the waiter a question.",  tag: 'restaurant', keywords: ['could you', 'I was wondering', 'instead of', 'by any chance'] }
     ];
     while (cleaned.length < 3) cleaned.push(FALLBACK[cleaned.length]);
     FLUENCY_SITUATION_CACHE.set(key, cleaned);
@@ -5054,7 +5061,7 @@ Return strict JSON only:
       // Bail if user cancelled in the meantime.
       if (!state.fluency || state.fluency.cardKey !== cardId(card)) return;
       state.fluency.situations = sits;
-      state.fluency.attempts = sits.map(s => ({ text: '', situationAr: s.ar }));
+      state.fluency.attempts = sits.map(s => ({ text: '', situationEn: s.en }));
       state.fluency.loadingSituations = false;
     } catch (e) {
       if (!state.fluency) return;
@@ -5085,7 +5092,7 @@ Return strict JSON only:
   function resetFluencyAttempts() {
     if (!state.fluency) return;
     state.fluency.feedback = null;
-    state.fluency.attempts = (state.fluency.situations || []).map(s => ({ text: '', situationAr: s.ar }));
+    state.fluency.attempts = (state.fluency.situations || []).map(s => ({ text: '', situationEn: s.en }));
     state.fluency.slotFeedback = [null, null, null];
     state.fluency.slotChecking = [false, false, false];
     state.fluency.slotError = ['', '', ''];
@@ -5232,7 +5239,8 @@ Return strict JSON only:
     }
 
     const slots = f.attempts.map((att, i) => {
-      const sit = f.situations[i] || { ar: att.situationAr, tag: '', keywords: [] };
+      const sit = f.situations[i] || { en: att.situationEn || att.situationAr || '', tag: '', keywords: [] };
+      const sitText = sit.en || sit.ar || '';
       const isRecording = f.recordingSlot === i;
       const isChecking = !!f.slotChecking?.[i];
       const slotFb = f.slotFeedback?.[i];
@@ -5248,7 +5256,7 @@ Return strict JSON only:
       return `<div class="fluency-slot${isLocked ? ' locked' : ''}">
         <div class="fluency-sit">
           <span class="fluency-num">${i + 1}</span>
-          <div class="fluency-sit-text" dir="rtl">${escapeHtml(sit.ar)}</div>
+          <div class="fluency-sit-text" dir="ltr">${escapeHtml(sitText)}</div>
           ${sit.tag ? `<span class="fluency-hint-chip" dir="ltr">${escapeHtml(sit.tag)}</span>` : ''}
         </div>
         ${keywordsHtml}
