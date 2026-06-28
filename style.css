@@ -55,6 +55,46 @@
 .settings-hint{font-size:12px;color:#64748b;line-height:1.55;background:#f8fafc;border:1px solid #eef2f7;border-radius:14px;padding:10px;margin:12px 0 2px}
 .settings-label{display:block;font-size:12px;font-weight:700;color:#0f172a;margin:14px 0 4px;letter-spacing:.02em;text-transform:uppercase}
 .menu-grid button#menuTtsKeys{background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc}
+
+/* ─── Fluency drill ─── */
+.fluency-btn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-weight:800}
+.fluency-btn:hover{background:#ffedd5}
+.fluency-panel{background:linear-gradient(180deg,#fffbf2,#fff);border:1px solid #fed7aa;border-radius:18px;padding:14px;margin-top:12px;display:flex;flex-direction:column;gap:12px}
+.fluency-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.fluency-title{font-weight:900;color:#9a3412;font-size:14px;flex:1}
+.fluency-target{background:#fff;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.fluency-target b{font-size:17px;color:#0f172a;flex:1}
+.fluency-target-label{font-size:11px;color:#9a3412;text-transform:uppercase;letter-spacing:.04em;font-weight:800}
+.fluency-target .speak-inline{min-width:36px;padding:6px 10px}
+.fluency-loading,.fluency-evaluating{text-align:center;padding:18px;color:#64748b;background:#fff;border-radius:12px}
+.fluency-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:0}
+.fluency-slots{display:flex;flex-direction:column;gap:10px}
+.fluency-slot{background:#fff;border:1px solid #fcd34d;border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.fluency-slot.locked{border-color:#e2e8f0;background:#fafafa}
+.fluency-sit{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.fluency-num{width:26px;height:26px;flex-shrink:0;border-radius:50%;background:#9a3412;color:#fff;font-weight:900;display:flex;align-items:center;justify-content:center;font-size:13px}
+.fluency-sit-text{flex:1;color:#0f172a;line-height:1.6;font-size:14px;min-width:0}
+.fluency-hint-chip{background:#fef3c7;color:#92400e;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;align-self:center}
+.fluency-input-row{display:flex;gap:8px;align-items:stretch}
+.fluency-input{flex:1;min-height:64px;resize:vertical;font-size:14px;line-height:1.5}
+.fluency-input[readonly]{background:#f8fafc;color:#475569}
+.fluency-mic{flex-shrink:0;width:48px;height:auto;min-height:48px;border-radius:14px;border:1px solid #fed7aa;background:#fff7ed;color:#9a3412;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.fluency-mic:hover{background:#ffedd5}
+.fluency-mic.rec{background:#ef4444;border-color:#dc2626;color:#fff;animation:flu-pulse 1.1s ease-in-out infinite}
+@keyframes flu-pulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}50%{box-shadow:0 0 0 10px rgba(239,68,68,0)}}
+.fluency-verdict{margin-top:4px;border-radius:12px;padding:10px;border:1px solid;display:flex;flex-direction:column;gap:6px}
+.fluency-verdict.good{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+.fluency-verdict.mid{background:#fefce8;border-color:#fde68a;color:#854d0e}
+.fluency-verdict.low{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.fluency-verdict-head{display:flex;align-items:center;gap:8px}
+.fluency-score{font-size:18px;font-weight:900;font-variant-numeric:tabular-nums}
+.fluency-badge{font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
+.fluency-badge.bad{background:#fee2e2;color:#991b1b}
+.fluency-corrected,.fluency-alt,.fluency-tip{font-size:13px;line-height:1.55}
+.fluency-corrected .lbl,.fluency-alt .lbl,.fluency-tip .lbl{font-weight:800;color:inherit;opacity:.85;margin-inline-end:6px}
+.fluency-overall{background:#0f172a;color:#f1f5f9;border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.6;direction:rtl;text-align:right;border:1px solid #1e293b}
+.fluency-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:stretch}
+.fluency-actions .full-btn{grid-column:1/-1}
 .settings-actions{display:grid;grid-template-columns:1fr .65fr .45fr;gap:8px;align-items:center}.small-btn.danger,.danger{background:#fee2e2!important;color:#991b1b!important;border-color:#fecaca!important}.menu-grid button#menuLaraAll{background:#ede9fe;color:#5b21b6}.menu-grid button#menuLaraSettings{background:#faf5ff;color:#6d28d9;border:1px solid #ddd6fe}
 .action-icon.translate{background:#ede9fe;color:#5b21b6}.line-action-strip .action-icon.translate{background:#ede9fe;color:#5b21b6}
 
