@@ -53,6 +53,8 @@
 .cloud-lesson p{word-break:break-all;margin:.35rem 0}.cloud-lesson small{display:block;color:#64748b;margin-top:4px}
 /* Lara natural subtitle translation */
 .settings-hint{font-size:12px;color:#64748b;line-height:1.55;background:#f8fafc;border:1px solid #eef2f7;border-radius:14px;padding:10px;margin:12px 0 2px}
+.settings-label{display:block;font-size:12px;font-weight:700;color:#0f172a;margin:14px 0 4px;letter-spacing:.02em;text-transform:uppercase}
+.menu-grid button#menuTtsKeys{background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc}
 .settings-actions{display:grid;grid-template-columns:1fr .65fr .45fr;gap:8px;align-items:center}.small-btn.danger,.danger{background:#fee2e2!important;color:#991b1b!important;border-color:#fecaca!important}.menu-grid button#menuLaraAll{background:#ede9fe;color:#5b21b6}.menu-grid button#menuLaraSettings{background:#faf5ff;color:#6d28d9;border:1px solid #ddd6fe}
 .action-icon.translate{background:#ede9fe;color:#5b21b6}.line-action-strip .action-icon.translate{background:#ede9fe;color:#5b21b6}
 

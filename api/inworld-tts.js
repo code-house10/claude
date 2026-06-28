@@ -55,9 +55,6 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const apiKey = (process.env.INWORLD_API_KEY || INWORLD_API_KEY_FALLBACK || '').trim();
-  if (!apiKey) return res.status(500).json({ error: 'Inworld API key not configured on the server.' });
-
   if (!rateLimit(getClientIp(req))) {
     return res.status(429).json({ error: 'Too many requests — slow down for a minute.' });
   }
@@ -66,6 +63,12 @@ export default async function handler(req, res) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const text = clean(body.text).slice(0, MAX_TEXT_LENGTH);
     if (!text) return res.status(400).json({ error: 'text is required.' });
+
+    // Priority: caller-supplied key > server env > hardcoded fallback.
+    // Inworld expects a base64-encoded "clientId:clientSecret" pair as the Basic auth credential.
+    const userKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+    const apiKey = (userKey || process.env.INWORLD_API_KEY || INWORLD_API_KEY_FALLBACK || '').trim();
+    if (!apiKey) return res.status(500).json({ error: 'Inworld API key not configured.' });
 
     const payload = {
       text,

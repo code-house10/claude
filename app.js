@@ -3930,12 +3930,97 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     return audio;
   }
 
+  // User-supplied TTS keys (live in localStorage so they survive reloads).
+  // The "API Keys" modal in Settings writes them; ttsViaProxy reads them
+  // and sends them in the request body. The server prefers a caller-key
+  // over its own env / hardcoded fallback, so the user can rotate keys
+  // themselves when a shared quota runs out.
+  const TTS_KEY_STORAGE = {
+    eleven:  'jm_tts_apikey_eleven',
+    inworld: 'jm_tts_apikey_inworld',
+    groq:    'jm_tts_apikey_groq'
+  };
+  function getTtsApiKey(provider) {
+    const k = TTS_KEY_STORAGE[provider];
+    if (!k) return '';
+    try { return localStorage.getItem(k) || ''; } catch { return ''; }
+  }
+  function setTtsApiKey(provider, value) {
+    const k = TTS_KEY_STORAGE[provider];
+    if (!k) return;
+    try {
+      const v = String(value || '').trim();
+      if (v) localStorage.setItem(k, v);
+      else   localStorage.removeItem(k);
+    } catch {}
+  }
+  // Map proxy endpoint → which TTS provider its key belongs to.
+  const PROXY_TO_PROVIDER = {
+    '/api/eleven-tts':  'eleven',
+    '/api/inworld-tts': 'inworld',
+    '/api/groq-tts':    'groq'
+  };
+
+  // ── TTS API keys modal ─────────────────────────────────────────
+  // Pulls saved keys into the form, lets the user edit them, and saves
+  // back to localStorage. Tested by speaking a short greeting through the
+  // currently-selected engine so the user immediately hears if it worked.
+  function openTtsKeysModal() {
+    const modal = $('ttsKeysModal');
+    if (!modal) return;
+    const fill = (id, prov) => { const inp = $(id); if (inp) inp.value = getTtsApiKey(prov); };
+    fill('ttsKeyElevenInput',  'eleven');
+    fill('ttsKeyInworldInput', 'inworld');
+    fill('ttsKeyGroqInput',    'groq');
+    const status = $('ttsKeysStatus');
+    if (status) status.textContent = '';
+    openMenu(false);
+    modal.classList.remove('hidden');
+  }
+  function saveTtsKeysFromForm() {
+    setTtsApiKey('eleven',  $('ttsKeyElevenInput')?.value || '');
+    setTtsApiKey('inworld', $('ttsKeyInworldInput')?.value || '');
+    setTtsApiKey('groq',    $('ttsKeyGroqInput')?.value    || '');
+    TTS_CACHE.clear();   // drop any cached audio that was made with the old key
+    const status = $('ttsKeysStatus');
+    if (status) status.textContent = 'Saved. Test the engine to confirm.';
+    toast('TTS keys saved');
+  }
+  function clearTtsKeysFromForm() {
+    ['eleven', 'inworld', 'groq'].forEach(p => setTtsApiKey(p, ''));
+    ['ttsKeyElevenInput', 'ttsKeyInworldInput', 'ttsKeyGroqInput'].forEach(id => {
+      const i = $(id); if (i) i.value = '';
+    });
+    TTS_CACHE.clear();
+    const status = $('ttsKeysStatus');
+    if (status) status.textContent = 'Cleared. The shared server keys will be used again.';
+    toast('TTS keys cleared');
+  }
+  async function testCurrentTtsEngine() {
+    // Save first so the test actually uses what's in the form right now —
+    // not the previously-saved keys.
+    saveTtsKeysFromForm();
+    const cfg = getTtsSettings();
+    const status = $('ttsKeysStatus');
+    if (status) status.textContent = `Testing ${cfg.provider}…`;
+    try {
+      await speakNatural(`Hello! This is a test of the ${cfg.provider} voice.`, { silent: true });
+      if (status) status.textContent = `${cfg.provider}: OK ✓`;
+    } catch (e) {
+      if (status) status.textContent = `${cfg.provider}: ${e?.message || e}`;
+    }
+  }
+
   // Shared helper for server-proxy engines that return { audioContent, mimeType }.
   async function ttsViaProxy(endpoint, payload, label) {
+    const provider = PROXY_TO_PROVIDER[endpoint];
+    const userKey = provider ? getTtsApiKey(provider) : '';
+    // Attach the user's key when set so the server prefers it over the shared one.
+    const finalPayload = userKey ? { ...payload, apiKey: userKey } : payload;
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(finalPayload)
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -7343,6 +7428,10 @@ ${condensed}`;
   if ($('menuPuterAll')) $('menuPuterAll').onclick = translateAllPuter;
   $('menuLaraSettings').onclick = () => openLaraSettings();
   if ($('menuAiTemplateSettings')) $('menuAiTemplateSettings').onclick = () => openChatLlmSettings();
+  if ($('menuTtsKeys')) $('menuTtsKeys').onclick = () => openTtsKeysModal();
+  if ($('saveTtsKeysBtn'))  $('saveTtsKeysBtn').onclick  = saveTtsKeysFromForm;
+  if ($('clearTtsKeysBtn')) $('clearTtsKeysBtn').onclick = clearTtsKeysFromForm;
+  if ($('testTtsKeysBtn'))  $('testTtsKeysBtn').onclick  = testCurrentTtsEngine;
   $('menuSavedWords').onclick = () => { openMenu(false); showSaved('words'); };
   if ($('menuSavedPhrases')) $('menuSavedPhrases').onclick = () => { openMenu(false); showSaved('phrases'); };
   if ($('menuSavedTemplates')) $('menuSavedTemplates').onclick = () => { openMenu(false); showSaved('templates'); };
