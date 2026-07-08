@@ -1,6 +1,6 @@
-const CACHE_NAME = 'jungle-movie-pwa-v36-fluency-en';
-const ASSETS = ['./', './index.html', './style.css?v=pwa-v36-fluency-en', './app.js?v=pwa-v36-fluency-en', './vocab-data.js?v=pwa-v36-fluency-en',
-  './manifest.webmanifest?v=pwa-v36-fluency-en', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png', './favicon-64.png'];
+const CACHE_NAME = 'jungle-movie-pwa-v37-story';
+const ASSETS = ['./', './index.html', './style.css?v=pwa-v37-story', './app.js?v=pwa-v37-story', './vocab-data.js?v=pwa-v37-story',
+  './manifest.webmanifest?v=pwa-v37-story', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png', './favicon-64.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

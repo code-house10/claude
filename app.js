@@ -2784,6 +2784,132 @@ ${rows.map(r => `${r.index}) ${r.en}`).join('\n')}`;
     ensureHfThenRefresh();
   }
 
+  // ─── Import story as pseudo-subtitles ──────────────────────────────
+  //
+  // Any pasted or uploaded prose is split into sentences and dropped into
+  // state.subtitles with dummy timestamps (5 s per sentence). That way the
+  // entire existing pipeline — clickable words, translate-all, save phrase,
+  // review cards, fluency drill — works on story text without a single
+  // new UI wire beyond the import modal itself.
+
+  function splitStoryIntoSentences(rawText) {
+    // Strip HTML that comes with copy-paste from web articles.
+    let text = String(rawText || '').replace(/<[^>]+>/g, ' ');
+    // Normalise whitespace, keep paragraph breaks so they act as hard splits.
+    text = text.replace(/\r\n/g, '\n').replace(/ /g, ' ');
+    if (!text.trim()) return [];
+
+    // Guard common abbreviations that would otherwise cause false splits
+    // (Mr., Dr., etc.). Replace the trailing dot with a placeholder that we
+    // restore after splitting.
+    const ABBREVIATIONS = ['Mr', 'Mrs', 'Ms', 'Dr', 'Prof', 'Sr', 'Jr', 'St', 'vs', 'etc', 'e.g', 'i.e'];
+    const DOT = '';
+    for (const abbr of ABBREVIATIONS) {
+      const re = new RegExp('\\b' + abbr.replace(/\./g, '\\.') + '\\.', 'g');
+      text = text.replace(re, abbr + DOT);
+    }
+
+    const out = [];
+    for (const para of text.split(/\n\s*\n+/)) {
+      // Split on sentence terminator followed by whitespace + capital / quote.
+      // Fall back to single-line splits if the paragraph never terminates cleanly.
+      const chunks = para.split(/(?<=[.!?…])\s+(?=[A-Z"'"'"«¿¡])/);
+      for (const c of chunks) {
+        const s = c.replace(new RegExp(DOT, 'g'), '.').replace(/\s+/g, ' ').trim();
+        if (s) out.push(s);
+      }
+    }
+    // Collapse any run of 3+ dots that survived splitting.
+    return out.map(s => s.replace(/\.{4,}/g, '…')).filter(Boolean);
+  }
+
+  function handleStoryText(rawText, title) {
+    const sentences = splitStoryIntoSentences(rawText);
+    if (!sentences.length) {
+      toast('No sentences found in that text.');
+      return false;
+    }
+    const SECS_PER_SENT = 5;
+    state.subtitles = sentences.map((s, i) => ({
+      startTime: i * SECS_PER_SENT,
+      endTime:   (i + 1) * SECS_PER_SENT - 0.05,
+      en: s,
+      ar: '',
+      time: formatTime(i * SECS_PER_SENT)
+    }));
+    state.activeIndex = -1; state.lastIndex = -1; state.lastWordIndex = -1;
+    state.listCenter = 0; state.repeatStart = -1; state.repeatEnd = -1;
+
+    // Pick a sensible title if the user didn't supply one.
+    let finalTitle = (title || '').trim();
+    if (!finalTitle) {
+      const first = sentences[0] || 'Imported story';
+      finalTitle = first.length > 60 ? first.slice(0, 57) + '…' : first;
+    }
+    setLessonTitle(finalTitle);
+    setStatus(`Story loaded · ${sentences.length} sentence${sentences.length === 1 ? '' : 's'}`);
+    renderList(0);
+    updateDock(null);
+    saveState();
+    ensureHfThenRefresh();
+    return true;
+  }
+
+  function openStoryImport() {
+    const modal = $('storyImportModal');
+    if (!modal) return;
+    openMenu(false);
+    const status = $('storyImportStatus');
+    if (status) status.textContent = '';
+    modal.classList.remove('hidden');
+    // Focus the textarea so the user can just start pasting.
+    setTimeout(() => { $('storyImportText')?.focus(); }, 60);
+  }
+
+  async function importStoryFromForm() {
+    const rawText = ($('storyImportText')?.value || '').trim();
+    const title   = ($('storyImportTitle')?.value || '').trim();
+    const status  = $('storyImportStatus');
+    const autoTx  = !!$('storyImportAutoTranslate')?.checked;
+    if (!rawText) {
+      if (status) status.textContent = 'Paste some text first (or upload a .txt file).';
+      return;
+    }
+    if (status) status.textContent = 'Importing…';
+    const ok = handleStoryText(rawText, title);
+    if (!ok) {
+      if (status) status.textContent = 'Could not detect any sentences.';
+      return;
+    }
+    closeModal('storyImportModal');
+    toast(`📖 Story imported · ${state.subtitles.length} sentences`);
+
+    // Optional: kick off the standard translate-all pipeline so the whole
+    // story ends up bilingual without an extra tap. Runs in the background —
+    // the user can start reading right away.
+    if (autoTx) {
+      try {
+        if (typeof translateAllPuter === 'function') {
+          setTimeout(() => translateAllPuter(), 400);
+        }
+      } catch (e) {
+        console.warn('Auto-translate after import failed:', e);
+      }
+    }
+  }
+
+  function loadStoryFileIntoForm(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || '');
+      const ta = $('storyImportText'); if (ta) ta.value = text;
+      const titleInput = $('storyImportTitle');
+      if (titleInput && !titleInput.value) titleInput.value = deriveLessonTitle(file.name);
+    };
+    reader.readAsText(file);
+  }
+
   function findIndexAt(time) {
     let lo = 0, hi = state.subtitles.length - 1, ans = -1;
     while (lo <= hi) {
@@ -7979,6 +8105,14 @@ ${condensed}`;
   $('menuLaraSettings').onclick = () => openLaraSettings();
   if ($('menuAiTemplateSettings')) $('menuAiTemplateSettings').onclick = () => openChatLlmSettings();
   if ($('menuTtsKeys')) $('menuTtsKeys').onclick = () => openTtsKeysModal();
+  if ($('menuImportStory')) $('menuImportStory').onclick = openStoryImport;
+  if ($('storyImportBtn')) $('storyImportBtn').onclick = importStoryFromForm;
+  if ($('storyImportFile')) $('storyImportFile').onchange = e => loadStoryFileIntoForm(e.target.files?.[0]);
+  if ($('storyImportClearBtn')) $('storyImportClearBtn').onclick = () => {
+    const ta = $('storyImportText'); if (ta) ta.value = '';
+    const ti = $('storyImportTitle'); if (ti) ti.value = '';
+    const st = $('storyImportStatus'); if (st) st.textContent = '';
+  };
   if ($('saveTtsKeysBtn'))  $('saveTtsKeysBtn').onclick  = saveTtsKeysFromForm;
   if ($('clearTtsKeysBtn')) $('clearTtsKeysBtn').onclick = clearTtsKeysFromForm;
   if ($('testTtsKeysBtn'))  $('testTtsKeysBtn').onclick  = testCurrentTtsEngine;
